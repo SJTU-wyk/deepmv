@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Hls from 'hls.js';
-import { api, DetailResult, pushHistory } from '../api';
+import { api, pushHistory, type DetailResult } from '../api';
 import { Upscaler } from '../upscale';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 /**
  * 播放器。
  *
- * 卡顿的根因是每帧都 setState：timeupdate 每秒触发 4 次，每次都重渲染整个组件树
- * （包括几百个选集按钮）。这里改成 ref + 直接写 DOM，只在「播放状态、切集、错误」
- * 这类真正需要重绘的时刻才 setState。
+ * 两条线并行：
+ *   详情用 useAsyncData 拿，换片自动作废旧请求；
+ *   播放地址解析单独一条，key 里带集数地址，切集就是换请求。
+ *
+ * 进度条走 rAF 直写 DOM，不触发 React 重渲染——这是之前卡顿的主因。
  */
 export default function Player() {
   const [params] = useSearchParams();
@@ -18,19 +21,17 @@ export default function Player() {
   const id = params.get('i') || '';
   const titleHint = params.get('t') || '';
 
-  const [detail, setDetail] = useState<DetailResult | null>(null);
   const [roadIndex, setRoadIndex] = useState(Number(params.get('r') || 0));
   const [epIndex, setEpIndex] = useState(Number(params.get('e') || 0));
-  const [resolved, setResolved] = useState('');
-  const [status, setStatus] = useState('正在解析视频地址…');
-  const [probeInfo, setProbeInfo] = useState('');
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [sr, setSr] = useState(0);
+  const [sr, setSr] = useState<0 | 1 | 2>(0);
   const [srError, setSrError] = useState('');
+  const [playError, setPlayError] = useState('');
   const [adNotice, setAdNotice] = useState('');
-  const [burnInRisk, setBurnInRisk] = useState(false);
+  const [probeInfo, setProbeInfo] = useState('');
   const [barVisible, setBarVisible] = useState(true);
+  const [autoSwitching, setAutoSwitching] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -40,104 +41,111 @@ export default function Player() {
   const hideTimer = useRef<number>();
   const rafRef = useRef<number>();
   const durationRef = useRef(0);
-  const failedRef = useRef(false);
-  const triedRef = useRef<string[]>([]);
+  const switchedRef = useRef(false);
 
-  /* ---------- 详情 ---------- */
-  useEffect(() => {
-    if (!source || !id) return;
-    api.detail(source, id).then(setDetail).catch(() => setStatus('无法加载详情'));
-  }, [source, id]);
+  const detail = useAsyncData(
+    'player-detail:' + source + ':' + id,
+    useCallback((signal) => api.detail(source, id, { signal }), [source, id]),
+    { enabled: !!source && !!id },
+  );
 
-  const road = detail?.roads[roadIndex];
+  const data: DetailResult | null = detail.data;
+  const road = data?.roads[roadIndex];
   const episode = road?.episodes[epIndex];
 
-  useEffect(() => { failedRef.current = false; }, [episode?.url]);
+  // 解析播放地址。key 里带地址，切集自动换请求，旧请求作废。
+  const resolved = useAsyncData(
+    'resolve:' + (episode?.url ?? ''),
+    useCallback((signal) => api.resolve(episode!.url, { signal }), [episode?.url]),
+    { enabled: !!episode?.url, keepPrevious: false },
+  );
 
-  /* ---------- 解析地址 ---------- */
+  // 换了条目就允许重新自动切换一次
+  useEffect(() => { switchedRef.current = false; setPlayError(''); }, [source, id]);
+
+  // 解析结果里的提示
   useEffect(() => {
-    if (!episode) return;
-    let alive = true;
-    setStatus('正在解析视频地址…');
-    setResolved('');
-    setProbeInfo('');
-    setAdNotice('');
-    api.resolve(episode.url)
-      .then((res) => {
-        if (!alive) return;
-        setResolved(res.url);
-        setStatus('');
-        if (res.mode === 'manifest' || res.mode === 'proxy') setAdNotice('已过滤清单广告');
-        // 已知几个采集源的片源把博彩广告烧进了画面，清单层删不掉，提醒换源
-        const risky = ['guangsu', 'ffzy', 'zuid', 'wujin', 'bdzy'];
-        setBurnInRisk(risky.includes(source));
-        api.probe(res.source || episode.url)
-          .then((probe) => { if (alive && probe.ok) setProbeInfo(probe.label + ' · ' + probe.width + 'x' + probe.height); })
-          .catch(() => undefined);
-      })
-      .catch((err) => { if (alive) setStatus('解析失败：' + String(err.message || err)); });
-    return () => { alive = false; };
-  }, [episode?.url]);
+    const mode = resolved.data?.mode;
+    if (mode === 'manifest' || mode === 'proxy') setAdNotice('已过滤清单广告');
+    else setAdNotice('');
+  }, [resolved.data?.mode]);
 
-  /* ---------- HLS 装载 ---------- */
+  // 探一下真实分辨率，纯展示用，失败不影响播放
+  useEffect(() => {
+    const probeUrl = resolved.data?.source;
+    if (!probeUrl) { setProbeInfo(''); return; }
+    let alive = true;
+    api.probe(probeUrl, { dedupeMs: 0 })
+      .then((probe) => { if (alive && probe.ok) setProbeInfo(probe.label + ' · ' + probe.width + 'x' + probe.height); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [resolved.data?.source]);
+
+  const tryNextSource = useCallback(async () => {
+    if (switchedRef.current || !data) return;
+    switchedRef.current = true;
+    setAutoSwitching(true);
+    setPlayError('');
+    try {
+      const res = await api.best(data.title, [data.source + ':' + data.id]);
+      if (res.best) {
+        navigate('/play?' + new URLSearchParams({
+          s: res.best.source, i: res.best.id, r: '0', e: '0', t: res.best.title, sn: res.best.sourceName,
+        }).toString());
+        return;
+      }
+      setPlayError('这条线路播不了，其它来源也没找到可用的');
+    } catch {
+      setPlayError('这条线路播不了');
+    } finally {
+      switchedRef.current = false;
+      setAutoSwitching(false);
+    }
+  }, [data, navigate]);
+
+  // 装载播放器
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !resolved) return;
+    const url = resolved.data?.url;
+    if (!video || !url) return;
     let hls: Hls | null = null;
     video.pause();
     video.removeAttribute('src');
     video.load();
 
-    const isHls = /\.m3u8/i.test(resolved) || resolved.includes('/api/proxy');
+    const isHls = /\.m3u8/i.test(url) || url.includes('/api/proxy');
     if (isHls && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 90,
-        backBufferLength: 30,
-        // 广告已被服务端清掉，播放器不需要再等 discontinuity
-        maxBufferHole: 0.5,
-      });
-      hls.loadSource(resolved);
+      hls = new Hls({ enableWorker: true, maxBufferLength: 30, maxMaxBufferLength: 90, backBufferLength: 30 });
+      hls.loadSource(url);
       hls.attachMedia(video);
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal && !failedRef.current) {
-          setStatus('线路异常，正在尝试其它来源…');
-          void tryNextSource();
-        }
+      hls.on(Hls.Events.ERROR, (_e, info) => {
+        if (info.fatal) void tryNextSource();
       });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl') && isHls) {
-      video.src = resolved;
     } else {
-      video.src = resolved;
+      video.src = url;
     }
 
     const onReady = () => {
-      setStatus('');
-      failedRef.current = false;
-      void video.play().catch(() => setStatus('点击画面开始播放'));
+      setPlayError('');
+      void video.play().catch(() => setPlayError('点一下画面开始播放'));
     };
-    const onErr = () => { if (!failedRef.current) { setStatus('线路不可用，尝试其它来源…'); void tryNextSource(); } };
+    const onError = () => void tryNextSource();
     video.addEventListener('loadedmetadata', onReady);
-    video.addEventListener('error', onErr);
+    video.addEventListener('error', onError);
     return () => {
       hls?.destroy();
       video.removeEventListener('loadedmetadata', onReady);
-      video.removeEventListener('error', onErr);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved]);
+      video.removeEventListener('error', onError);
+    }
+  }, [resolved.data?.url, tryNextSource]);
 
-  /* ---------- 进度条：用 rAF 直写 DOM，不再走 React ---------- */
+  // 进度条：rAF 直写 DOM
   useEffect(() => {
     const tick = () => {
       const v = videoRef.current;
       if (v && fillRef.current && timeRef.current) {
         const d = durationRef.current || v.duration || 0;
-        if (v.currentTime && d) {
-          fillRef.current.style.width = ((v.currentTime / d) * 100).toFixed(2) + '%';
-        }
+        if (v.currentTime && d) fillRef.current.style.width = ((v.currentTime / d) * 100).toFixed(2) + '%';
         timeRef.current.textContent = fmt(v.currentTime) + ' / ' + fmt(d);
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -146,32 +154,7 @@ export default function Player() {
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, []);
 
-  /* ---------- 自动隐藏控制栏 ---------- */
-  const showBar = useCallback(() => {
-    setBarVisible((prev) => (prev ? prev : true));
-    window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => setBarVisible(false), 3400);
-  }, []);
-
-  const tryNextSource = useCallback(async () => {
-    if (failedRef.current || !detail) return;
-    failedRef.current = true;
-    const key = detail.source + ':' + detail.id;
-    try {
-      const res = await api.best(detail.title, [...triedRef.current, key]);
-      if (res.best) {
-        triedRef.current = [...triedRef.current, key];
-        navigate('/play?' + new URLSearchParams({
-          s: res.best.source, i: res.best.id, r: '0', e: '0', t: res.best.title, sn: res.best.sourceName,
-        }).toString());
-      } else {
-        setStatus('所有来源均不可用');
-        failedRef.current = false;
-      }
-    } catch { setStatus('线路不可用'); failedRef.current = false; }
-  }, [detail, navigate]);
-
-  /* ---------- 超分 ---------- */
+  // 超分
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -185,8 +168,7 @@ export default function Player() {
     }
     try {
       if (!upscalerRef.current) upscalerRef.current = new Upscaler(canvas, video);
-      upscalerRef.current.start(sr as 0 | 1 | 2);
-      upscalerRef.current.setLevel(sr as 0 | 1 | 2);
+      upscalerRef.current.start(sr);
       canvas.style.display = 'block';
       video.style.opacity = '0';
       setSrError('');
@@ -198,27 +180,32 @@ export default function Player() {
 
   useEffect(() => () => { upscalerRef.current?.stop(); }, []);
 
-  /* ---------- 记录历史 ---------- */
+  // 记历史 + 改标题
   useEffect(() => {
-    if (episode && detail) {
-      pushHistory({
-        source: detail.source, sourceName: detail.sourceName, id: detail.id, title: detail.title,
-        pic: detail.pic, episode: episode.name, url: episode.url, road: road?.name || '',
-        quality: probeInfo || road?.bestQuality.label || '', at: Date.now(),
-      });
-      document.title = detail.title + ' · ' + episode.name + ' · DeepMV';
-    }
-  }, [episode?.url, probeInfo, detail, road?.name, episode?.name]);
+    if (!data || !episode) return;
+    pushHistory({
+      source: data.source, sourceName: data.sourceName, id: data.id, title: data.title,
+      pic: data.pic, episode: episode.name, url: episode.url, road: road?.name || '',
+      quality: probeInfo || (road?.bestQuality.label ?? ''), at: Date.now(),
+    });
+    document.title = data.title + ' · ' + episode.name + ' · DeepMV';
+  }, [data?.id, episode?.url, probeInfo, road?.name, episode?.name, data?.title, data?.source, data?.sourceName, data?.pic]);
 
   const next = useCallback(() => {
-    if (!road) return;
-    if (epIndex + 1 < road.episodes.length) setEpIndex(epIndex + 1);
-    else if (detail && roadIndex + 1 < detail.roads.length) { setRoadIndex(roadIndex + 1); setEpIndex(0); }
-  }, [road, epIndex, roadIndex, detail]);
+    if (!road || !data) return;
+    if (epIndex + 1 < road.episodes.length) { setEpIndex(epIndex + 1); return; }
+    if (roadIndex + 1 < data.roads.length) { setRoadIndex(roadIndex + 1); setEpIndex(0); }
+  }, [road, epIndex, roadIndex, data]);
 
-  const changeSpeed = (s: number) => {
-    setSpeed(s);
-    if (videoRef.current) videoRef.current.playbackRate = s;
+  const showBar = useCallback(() => {
+    setBarVisible(true);
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setBarVisible(false), 3400);
+  }, []);
+
+  const changeSpeed = (v: number) => {
+    setSpeed(v);
+    if (videoRef.current) videoRef.current.playbackRate = v;
   };
 
   const toggleFullscreen = () => {
@@ -241,20 +228,25 @@ export default function Player() {
     return () => window.removeEventListener('keydown', onKey);
   }, [next, showBar]);
 
+  const status = useMemo(() => {
+    if (detail.loading) return '正在加载详情…';
+    if (detail.error) return detail.error;
+    if (resolved.loading) return '正在解析播放地址…';
+    if (resolved.error) return resolved.error;
+    if (autoSwitching) return '这条线路播不了，正在找其它来源…';
+    if (playError) return playError;
+    return '';
+  }, [detail.loading, detail.error, resolved.loading, resolved.error, autoSwitching, playError]);
+
   return (
     <div className="player-page">
       <div className="player-stage" onMouseMove={showBar}>
         <button className="player-close" onClick={() => navigate(-1)} title="关闭">✕</button>
         <div className="player-title-strip">
-          <span style={{ fontWeight: 700 }}>{detail?.title || titleHint}</span>
+          <span style={{ fontWeight: 700 }}>{data?.title || titleHint}</span>
           {episode && <span className="muted">{road?.name} · {episode.name}</span>}
           {probeInfo && <span style={{ color: 'var(--gold)' }}>{probeInfo}</span>}
           {adNotice && <span className="ad-chip">{adNotice}</span>}
-          {burnInRisk && (
-            <span className="ad-chip warn" title="片源把赌博广告烧进了视频画面，清单过滤删不掉，只能换源">
-              画面广告 · 建议换源
-            </span>
-          )}
         </div>
         <div className="player-video-wrap">
           <canvas ref={canvasRef} className="sr-canvas" style={{ display: 'none' }} />
@@ -284,7 +276,7 @@ export default function Player() {
           }}>
             <div className="pb-fill" ref={fillRef} style={{ width: '0%' }} />
           </div>
-          <button className="pb-select" onClick={() => setSr((v) => (v + 1) % 3)} title="本地超分">
+          <button className="pb-select" onClick={() => setSr((v) => ((v + 1) % 3) as 0 | 1 | 2)} title="本地超分">
             {'SR ' + (sr === 0 ? 'OFF' : sr === 1 ? '1.5x' : '2x')}
           </button>
           <select className="pb-select" value={speed} onChange={(e) => changeSpeed(Number(e.target.value))}>
@@ -296,20 +288,20 @@ export default function Player() {
       </div>
       <aside className="player-side">
         <div className="player-side-head">
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>{detail?.title || titleHint}</div>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>{data?.title || titleHint}</div>
           <div className="muted">{road?.name} · {episode?.name}{probeInfo ? ' · ' + probeInfo : ''}</div>
           <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[0, 1, 2].map((v) => (
-              <button key={v} className={'chip' + (sr === v ? ' active' : '')} onClick={() => setSr(v)} style={{ fontSize: 11.5, padding: '5px 10px' }}>
+              <button key={v} className={'chip' + (sr === v ? ' active' : '')} onClick={() => setSr(v as 0 | 1 | 2)} style={{ fontSize: 11.5, padding: '5px 10px' }}>
                 {v === 0 ? '超分关' : v === 1 ? '超分 1.5x' : '超分 2x'}
               </button>
             ))}
           </div>
           {srError && <div className="muted" style={{ marginTop: 8, color: 'var(--danger)' }}>{srError}</div>}
         </div>
-        {detail && detail.roads.length > 1 && (
+        {data && data.roads.length > 1 && (
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--line)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {detail.roads.map((r, i) => (
+            {data.roads.map((r, i) => (
               <button key={r.name + i} className={'chip' + (i === roadIndex ? ' active' : '')}
                 onClick={() => { setRoadIndex(i); setEpIndex(0); }} style={{ fontSize: 11.5, padding: '5px 10px' }}>
                 {r.name.slice(0, 12)}

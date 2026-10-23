@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, imgUrl, Section, SearchItem } from '../api';
-import { PosterRow, PosterCard } from '../components/Poster';
+import { api, imgUrl, type Section, type SearchItem } from '../api';
+import { PosterRow } from '../components/Poster';
+import { SkeletonRow, ErrorNotice } from '../components/Feedback';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'all', label: '全部' },
@@ -19,28 +21,30 @@ const TABS: { key: string; label: string }[] = [
 ];
 
 export default function Home() {
-  const [sections, setSections] = useState<Section[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [tab, setTab] = useState('all');
   const [heroIndex, setHeroIndex] = useState(0);
+  // 换一批：改 key 触发重新拉取，旧请求由 hook 自动取消并作废
+  const [refreshToken, setRefreshToken] = useState(0);
 
-  const load = (refresh = false) => {
-    setLoading(true);
-    api.home(refresh)
-      .then((res) => { setSections(res.sections); setError(''); })
-      .catch((err) => setError(String(err.message || err)))
-      .finally(() => setLoading(false));
-  };
+  const home = useAsyncData(
+    'home:' + refreshToken,
+    useCallback((signal) => api.home(refreshToken > 0, { signal }), [refreshToken]),
+    { keepPrevious: true, debounceMs: 0 },
+  );
 
-  useEffect(() => { load(); }, []);
+  const sections: Section[] = home.data?.sections ?? [];
 
   const heroPool = useMemo<SearchItem[]>(() => {
     const flat: SearchItem[] = [];
     for (const sec of sections) for (const item of sec.items) if (item.pic) flat.push(item);
     const seen = new Set<string>();
-    return flat.filter((i) => { const k = i.title; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
+    return flat
+      .filter((i) => { const k = i.title; if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 8);
   }, [sections]);
+
+  // 数据换了以后把轮播重置，否则可能指到不存在的下标
+  useEffect(() => { setHeroIndex(0); }, [heroPool.length]);
 
   useEffect(() => {
     if (heroPool.length < 2) return;
@@ -48,11 +52,15 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [heroPool.length]);
 
-  const hero = heroPool[heroIndex];
+  const hero = heroPool[heroIndex % Math.max(1, heroPool.length)];
   const visible = tab === 'all' ? sections : sections.filter((s) => s.key === tab);
+  const firstLoad = home.loading && sections.length === 0;
+  const hasContent = sections.length > 0;
 
   return (
     <main className="page">
+      {home.refreshing && <div className="refresh-bar" />}
+
       {hero && (
         <section className="hero">
           <div className="hero-bg" style={{ backgroundImage: 'url(' + imgUrl(hero.pic) + ')' }} />
@@ -69,34 +77,65 @@ export default function Home() {
             </div>
             <p className="hero-intro">{hero.remarks || '多线路聚合 · 自动挑选最高画质线路播放'}</p>
             <div className="hero-actions">
-              <Link className="btn primary" to={'/detail/' + hero.source + '/' + encodeURIComponent(hero.id)}>立即播放</Link>
-              <button className="btn" onClick={() => load(true)}>刷新推荐</button>
+              <Link className="btn primary" to={'/detail/' + hero.source + '/' + encodeURIComponent(hero.id)}>
+                立即播放
+              </Link>
+              <button className="btn" onClick={() => setRefreshToken((t) => t + 1)} disabled={home.refreshing}>
+                {home.refreshing ? '刷新中…' : '刷新推荐'}
+              </button>
             </div>
           </div>
         </section>
       )}
 
+      {/* 错误提示留在页面上方，已经拿到的内容继续显示，不清空 */}
+      {home.error && (
+        <ErrorNotice
+          message={hasContent ? home.error + '（下面显示的是上一次的内容）' : home.error}
+          onRetry={home.retry}
+        />
+      )}
+
       <div className="chips">
         {TABS.map((t) => (
-          <button key={t.key} className={'chip' + (tab === t.key ? ' active' : '')} onClick={() => setTab(t.key)}>{t.label}</button>
+          <button key={t.key} className={'chip' + (tab === t.key ? ' active' : '')} onClick={() => setTab(t.key)}>
+            {t.label}
+          </button>
         ))}
       </div>
 
-      {loading && <div className="loading">正在聚合多源片库…（首次加载约 10 秒）</div>}
-      {error && <div className="empty">加载失败：{error}</div>}
+      {firstLoad && (
+        <>
+          <section className="section">
+            <div className="section-head">
+              <h2 className="section-title">正在聚合多源片库</h2>
+              <span className="section-sub">首次加载大约需要十几秒</span>
+            </div>
+            <SkeletonRow count={7} />
+          </section>
+          <section className="section">
+            <div className="section-head"><div className="skeleton skeleton-line" style={{ width: 160, height: 18 }} /></div>
+            <SkeletonRow count={7} />
+          </section>
+        </>
+      )}
 
-      {!loading && visible.map((sec) => (
+      {!firstLoad && visible.map((sec) => (
         <section className="section" key={sec.key}>
           <div className="section-head">
             <h2 className="section-title">{sec.title}</h2>
             <span className="section-sub">{sec.subtitle}</span>
-            <button className="section-more btn ghost" onClick={() => load(true)}>换一批</button>
+            <button className="section-more btn ghost" onClick={() => setRefreshToken((t) => t + 1)}>
+              换一批
+            </button>
           </div>
           <PosterRow items={sec.items} />
         </section>
       ))}
 
-      {!loading && !error && visible.length === 0 && <div className="empty">该分类暂无数据</div>}
+      {!firstLoad && !home.error && visible.length === 0 && (
+        <div className="empty">这个分类暂时没有数据</div>
+      )}
     </main>
   );
 }

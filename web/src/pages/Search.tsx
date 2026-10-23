@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { api, SearchItem, SourceStat } from '../api';
+import { api, type SearchItem, type SourceStat } from '../api';
 import { PosterCard } from '../components/Poster';
+import { SkeletonGrid, ErrorNotice, PartialNotice } from '../components/Feedback';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 type SortKey = 'quality' | 'score' | 'year' | 'title';
 
@@ -9,24 +11,20 @@ export default function Search() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const q = params.get('q') || '';
-  const [items, setItems] = useState<SearchItem[]>([]);
-  const [stats, setStats] = useState<SourceStat[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+
   const [sort, setSort] = useState<SortKey>('quality');
   const [minHeight, setMinHeight] = useState(0);
   const [input, setInput] = useState(q);
 
-  useEffect(() => { setInput(q); }, [q]);
+  // key 里带关键词：换关键词就是换了一次请求，旧请求由 hook 作废
+  const result = useAsyncData(
+    'search:' + q,
+    useCallback((signal) => api.search(q, { signal }), [q]),
+    { enabled: q.length > 0, keepPrevious: false },
+  );
 
-  useEffect(() => {
-    if (!q) { setItems([]); setStats([]); return; }
-    setLoading(true); setError('');
-    api.search(q)
-      .then((res) => { setItems(res.items); setStats(res.sources); })
-      .catch((err) => setError(String(err.message || err)))
-      .finally(() => setLoading(false));
-  }, [q]);
+  const items: SearchItem[] = result.data?.items ?? [];
+  const stats: SourceStat[] = result.data?.sources ?? [];
 
   const filtered = useMemo(() => {
     let list = items.filter((i) => i.quality.height >= minHeight);
@@ -39,15 +37,28 @@ export default function Search() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim()) navigate('/search?q=' + encodeURIComponent(input.trim()));
+    const keyword = input.trim();
+    if (keyword) navigate('/search?q=' + encodeURIComponent(keyword));
   };
+
+  const failedSources = stats.filter((s) => s.error).length;
 
   return (
     <main className="page">
+      {result.refreshing && <div className="refresh-bar" />}
+
       <section className="section" style={{ marginTop: 26 }}>
         <form onSubmit={submit} style={{ display: 'flex', gap: 10 }}>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入片名，多源同时检索"
-            style={{ flex: '0 1 520px', height: 44, padding: '0 16px', borderRadius: 12, border: '1px solid var(--line)', background: 'rgba(255,255,255,0.05)', color: 'var(--text)', outline: 'none' }} />
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="输入片名，多源同时检索"
+            style={{
+              flex: '0 1 520px', height: 44, padding: '0 16px', borderRadius: 12,
+              border: '1px solid var(--line)', background: 'rgba(255,255,255,0.05)',
+              color: 'var(--text)', outline: 'none',
+            }}
+          />
           <button className="btn primary" type="submit" style={{ height: 44 }}>搜索</button>
         </form>
       </section>
@@ -57,7 +68,7 @@ export default function Search() {
           {stats.map((s) => (
             <span className="pill" key={s.id}>
               <i className={'dot' + (s.error ? ' err' : '')} />
-              {s.name} · {s.error ? '超时' : s.count + ' 条'} · {s.ms}ms
+              {s.name} · {s.error ? '暂不可用' : s.count + ' 条'} · {s.ms}ms
             </span>
           ))}
         </div>
@@ -74,13 +85,31 @@ export default function Search() {
         ))}
       </div>
 
-      {loading && <div className="loading">正在并行检索 {stats.length || 6} 个片源…</div>}
-      {error && <div className="empty">检索失败：{error}</div>}
-      {!loading && !error && q && filtered.length === 0 && <div className="empty">没有找到「{q}」，换个片名试试</div>}
-      {!loading && filtered.length > 0 && (
-        <div className="grid-cards">
-          {filtered.map((item, i) => <PosterCard key={item.source + item.id + i} item={item} />)}
-        </div>
+      {!q && <div className="empty">输入片名开始搜索</div>}
+
+      {result.loading && q && (
+        <section className="section">
+          <div className="section-head">
+            <h2 className="section-title">正在并行检索</h2>
+            <span className="section-sub">多个来源同时查，慢的会先跳过</span>
+          </div>
+          <SkeletonGrid count={12} />
+        </section>
+      )}
+
+      {result.error && <ErrorNotice message={result.error} onRetry={result.retry} />}
+
+      {!result.loading && q && !result.error && (
+        <>
+          <PartialNotice failed={failedSources} total={stats.length} />
+          {filtered.length === 0 ? (
+            <div className="empty">没有找到「{q}」，换个片名试试</div>
+          ) : (
+            <div className="grid-cards">
+              {filtered.map((item, i) => <PosterCard key={item.source + item.id + i} item={item} />)}
+            </div>
+          )}
+        </>
       )}
     </main>
   );

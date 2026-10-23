@@ -17,7 +17,7 @@ async function request(rule: Rule, params: Record<string, string>): Promise<{ li
     referer: rule.referer || rule.baseUrl,
     userAgent: rule.userAgent,
     headers: rule.headers,
-    timeoutMs: 14000,
+    timeoutMs: 7000,
     retry: 1,
   });
   const trimmed = text.trim();

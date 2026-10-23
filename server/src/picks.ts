@@ -1,7 +1,9 @@
 import { COLLECTIONS, getCollection } from './collections.js';
 import { searchAll, type MergedItem, withTimeout } from './aggregate.js';
+import { caches } from './cache.js';
 
-const PICK_TTL = 6 * 60 * 60 * 1000;
+const PICK_TTL = Number(process.env.DEEPMV_PICK_TTL || 6 * 60 * 60 * 1000);
+const RESOLVE_TTL = Number(process.env.DEEPMV_PICK_RESOLVE_TTL || 12 * 60 * 60 * 1000);
 const PICK_SOURCES = ['modu', 'bdzy', 'lzi', 'rycz', 'ffzy'];
 const cache = new Map<string, { at: number; data: any }>();
 
@@ -74,6 +76,7 @@ let warmerStarted = false;
 
 /** 服务启动时后台预热片单，避免首页首次访问等待 */
 export function startWarmup() {
+  if (process.env.DEEPMV_WARMUP !== '1') return;
   if (warmerStarted) return;
   warmerStarted = true;
   const jobs = COLLECTIONS.map((c) => c.id);

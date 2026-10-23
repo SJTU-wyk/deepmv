@@ -43,7 +43,8 @@ USER deepmv
 WORKDIR /app/server
 EXPOSE 7821
 
+# 端口由平台注入，健康检查跟着 PORT 走，别写死
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD wget -qO- http://127.0.0.1:7821/api/health || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT:-7821}/api/health" || exit 1
 
 CMD ["node", "dist/index.js"]

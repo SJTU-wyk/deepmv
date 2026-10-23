@@ -1,10 +1,10 @@
-# Render Blueprint —— 不用服务器也能让别人访问
+# Render Blueprint —— 不用自己的服务器也能让别人访问
 #
-# 用法：把仓库推到 GitHub 后，在 Render 里选 New → Blueprint，指向这个仓库。
-# Render 会照着这份配置建服务，几分钟后给你一个带 HTTPS 的公开地址。
+# 用法：仓库推到 GitHub 后，Render 里选 New → Blueprint，指向这个仓库。
+# 几分钟后拿到一个带 HTTPS 的公开地址。
 #
 # 免费档注意：实例闲置 15 分钟后休眠，下次访问要等 30~60 秒唤醒。
-# 做长期公开站点，还是用 deploy/install.sh 装到自己的服务器上更稳。
+# 想让站点长期在线，用 deploy/install.sh 装到自己的服务器上。
 
 services:
   - type: web
@@ -15,15 +15,45 @@ services:
     region: singapore
     healthCheckPath: /api/health
     envVars:
-      - key: DEEPMV_MODE
-        value: public
-      # 不设口令就是任何人可访问。想让朋友自己用就设一个随机串
-      - key: DEEPMV_KEY
-        sync: false
-      - key: DEEPMV_RATE
-        value: "90"
-      # 视频代理在公网环境关掉：出站流量免费额度扛不住
-      - key: ALLOW_PROXY
-        value: "0"
       - key: NODE_ENV
         value: production
+      - key: DEEPMV_MODE
+        value: public
+
+      # 访问口令：留空就是完全公开。想小范围分享就在 Render 面板里设一个随机串
+      - key: DEEPMV_KEY
+        sync: false
+
+      # 限流按「成本」算，不是按次数。
+      # 每 IP 每分钟 240 个成本点：首页 1 点、详情 2 点、搜索 4 点、海报 0 点。
+      # 正常浏览（开首页 + 翻几个详情 + 搜两三次）用不到 50 点。
+      - key: DEEPMV_RATE
+        value: "240"
+      # 搜索这类打上游的接口单独一个更小的额度
+      - key: DEEPMV_EXPENSIVE_RATE
+        value: "60"
+
+      # 视频代理在公网必须关：免费档出站流量扛不住视频
+      - key: ALLOW_PROXY
+        value: "0"
+
+      # 冷启动优化：不在启动时同步抓上游。
+      # 首页改成按分区渐进加载，第一次访问 9 秒内出内容，之后走缓存。
+      - key: DEEPMV_WARMUP
+        value: "0"
+      - key: DEEPMV_HOME_DEADLINE
+        value: "9000"
+      - key: DEEPMV_SEARCH_DEADLINE
+        value: "6000"
+
+      # 并发：不同源之间放开，同一主机最多 3 个
+      - key: DEEPMV_UPSTREAM_CONCURRENCY
+        value: "12"
+      - key: DEEPMV_PER_HOST_LIMIT
+        value: "3"
+
+      # 日志别刷屏：只记慢请求和错误
+      - key: DEEPMV_LOG_LEVEL
+        value: "info"
+      - key: DEEPMV_SLOW_MS
+        value: "1500"

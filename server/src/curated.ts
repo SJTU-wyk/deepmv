@@ -1,7 +1,10 @@
 import { loadRules } from './rules.js';
 import * as maccms from './adapters/maccms.js';
-import { mergeItems, type MergedItem, withTimeout } from './aggregate.js';
+import { mergeItems, type MergedItem } from './aggregate.js';
 import { peekPicks } from './picks.js';
+import { caches } from './cache.js';
+import { log } from './log.js';
+import { mapLimit, UPSTREAM_CONCURRENCY } from './upstream.js';
 import { type SearchItem } from './types.js';
 
 export interface Section {
@@ -48,8 +51,8 @@ const SPECS: SectionSpec[] = [
   { key: 'documentary', title: '纪录片', subtitle: '自然 · 历史 · 社会纪实', categoryKey: 'doc', limit: 18 },
 ];
 
-const CACHE_TTL = 15 * 60 * 1000;
-let cache: { at: number; data: Section[] } | null = null;
+/** 首页缓存时长。改小可以让新片更快出现，改大能省上游请求。 */
+const CACHE_TTL = Number(process.env.DEEPMV_HOME_TTL || 8 * 60_000);
 
 function scoreOf(item: SearchItem): number {
   const n = Number(item.score ?? 0);
@@ -86,53 +89,117 @@ function dedupeSeries(items: SearchItem[]): SearchItem[] {
   return order.map((k) => seen.get(k)!).filter(Boolean);
 }
 
-let refreshing: Promise<Section[]> | null = null;
 
-/** 后台刷新（stale-while-revalidate），同一时刻只跑一次 */
-function refreshInBackground() {
-  if (refreshing) return refreshing;
-  refreshing = build()
-    .catch(() => cache?.data ?? [])
-    .finally(() => { refreshing = null; });
-  return refreshing;
-}
 
-export async function getHomeSections(force = false): Promise<Section[]> {
-  if (!force && cache) {
-    const stale = Date.now() - cache.at >= CACHE_TTL;
-    if (stale) void refreshInBackground();
-    return cache.data;   // 有缓存立刻返回，过期也在后台换新
-  }
-  return build();
-}
+/** 每个分区分开缓存：一个分区慢不影响其它分区先显示 */
+const sectionCache = new Map<string, { at: number; data: Section }>();
 
-export async function warmHome(): Promise<void> {
-  if (!cache) await refreshInBackground();
-}
+/** 首页总时限：到点就把已经建好的分区返回，剩下的在后台继续，下次访问就有了 */
+const HOME_DEADLINE_MS = Number(process.env.DEEPMV_HOME_DEADLINE || 9_000);
 
-async function build(): Promise<Section[]> {
+/** 正在构建中的分区，避免同一分区被并发构建两次 */
+const sectionInflight = new Map<string, Promise<Section>>();
+
+/**
+ * 建一个分区。
+ *
+ * 原来是把 11 个分区一次性全建完（13 源 × 2 页 × 11 分区 ≈ 286 个上游请求），
+ * 实测冷启动要 77 秒 —— 第一个访问的人只能对着白屏等。
+ * 改成按分区建、按分区缓存、加总时限之后，首屏 9 秒内就有内容。
+ */
+async function buildSection(spec: SectionSpec): Promise<Section> {
   const rules = loadRules();
-  const sections: Section[] = [];
-  for (const spec of SPECS) {
-    const jobs: Promise<SearchItem[]>[] = [];
-    for (const rule of rules) {
-      const ids = rule.categoryMap?.[spec.categoryKey];
-      if (!ids || !ids.length || rule.adapter !== 'maccms') continue;
-      for (const pg of spec.key === 'high-score' ? [1, 2, 3, 4] : [1, 2]) {
-        jobs.push(withTimeout(maccms.categoryList(rule, ids, pg), 15000, rule.name + ' 超时').catch(() => [] as SearchItem[]));
-      }
+  const jobs: Promise<SearchItem[]>[] = [];
+  for (const rule of rules) {
+    const ids = rule.categoryMap?.[spec.categoryKey];
+    if (!ids || !ids.length || rule.adapter !== 'maccms') continue;
+    // 高分榜要更多数据才筛得出来，其余分区一页就够
+    const pages = spec.key === 'high-score' ? [1, 2] : [1];
+    for (const pg of pages) {
+      const cacheKey = 'cat:' + rule.id + ':' + ids.join(',') + ':' + pg;
+      jobs.push(
+        caches.upstream
+          .memo(cacheKey, CACHE_TTL, () => maccms.categoryList(rule, ids, pg))
+          .catch(() => [] as SearchItem[]),
+      );
     }
-    const groups = await Promise.all(jobs);
-    let items = groups.flat().filter((i) => !/解说|预告|花絮|短剧|片段|动态漫|资讯|综艺|脱口秀|专访/i.test(i.title))
-      .filter((i) => !/综艺|真人秀/.test(i.genre ?? ''));
-    if (spec.keepArea) items = items.filter((i) => !i.area || spec.keepArea!.test(i.area.replace(/[,\/、]/g, ' ')));
-    if (spec.maxYear) items = items.filter((i) => i.year && Number(i.year) <= spec.maxYear!);
-    if (spec.minYear) items = items.filter((i) => i.year && Number(i.year) >= spec.minYear!);
-    if (spec.minScore) items = items.filter((i) => scoreOf(i) >= spec.minScore!);
-    sections.push({ key: spec.key, title: spec.title, subtitle: spec.subtitle, items: dedupeSeries(rank(items)).slice(0, spec.limit) });
   }
-  cache = { at: Date.now(), data: sections };
-  return sections;
+
+  // 不再用 mapLimit 串行：并发闸门已经按主机限制，不同源之间放开才快
+  const groups = await Promise.all(jobs);
+  let items = groups.flat().filter((i) => !/解说|预告|花絮|短剧|片段|动态漫|资讯|综艺|脱口秀|专访/i.test(i.title))
+    .filter((i) => !/综艺|真人秀/.test(i.genre ?? ''));
+
+  if (spec.keepArea) items = items.filter((i) => !i.area || spec.keepArea!.test(i.area.replace(/[,\/、]/g, ' ')));
+  if (spec.maxYear) items = items.filter((i) => i.year && Number(i.year) <= spec.maxYear!);
+  if (spec.minYear) items = items.filter((i) => i.year && Number(i.year) >= spec.minYear!);
+  if (spec.minScore) items = items.filter((i) => scoreOf(i) >= spec.minScore!);
+
+  return { key: spec.key, title: spec.title, subtitle: spec.subtitle, items: dedupeSeries(rank(items)).slice(0, spec.limit) };
+}
+
+/** 取一个分区：缓存优先，没有就建，同时只建一次 */
+function getSection(spec: SectionSpec): Promise<Section> {
+  const hit = sectionCache.get(spec.key);
+  if (hit && Date.now() - hit.at < CACHE_TTL) return Promise.resolve(hit.data);
+  if (hit) void rebuildSection(spec);           // 过期了先给旧的，后台换新
+  const running = sectionInflight.get(spec.key);
+  if (running) return running;
+  return rebuildSection(spec);
+}
+
+function rebuildSection(spec: SectionSpec): Promise<Section> {
+  const running = sectionInflight.get(spec.key);
+  if (running) return running;
+  const task = buildSection(spec)
+    .then((section) => {
+      sectionCache.set(spec.key, { at: Date.now(), data: section });
+      return section;
+    })
+    .catch(() => {
+      // 建失败就把旧的交出去，别让整个首页挂掉
+      const stale = sectionCache.get(spec.key);
+      return stale?.data ?? { key: spec.key, title: spec.title, subtitle: spec.subtitle, items: [] };
+    })
+    .finally(() => { sectionInflight.delete(spec.key); });
+  sectionInflight.set(spec.key, task);
+  return task;
+}
+
+/**
+ * 对外出口。
+ *
+ * 只等 HOME_DEADLINE_MS，到点返回已就绪的分区。
+ * 没就绪的分区在后台继续构建，下次访问就有了 —— 对用户来说就是「越刷越全」。
+ */
+export async function getHomeSections(force = false): Promise<Section[]> {
+  const specs = force ? SPECS.map((s) => ({ spec: s, force: true })) : SPECS.map((s) => ({ spec: s, force: false }));
+
+  const tasks = specs.map(({ spec, force: f }) => (f ? rebuildSection(spec) : getSection(spec)));
+  const settled = new Map<string, Section>();
+
+  const collector = Promise.all(
+    tasks.map(async (task) => {
+      const section = await task.catch(() => null);
+      if (section) settled.set(section.key, section);
+    }),
+  );
+
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, HOME_DEADLINE_MS));
+  await Promise.race([collector, deadline]);
+
+  // 只返回已经有内容的分区；空的说明还在建
+  return SPECS.map((s) => settled.get(s.key)).filter((s): s is Section => !!s && s.items.length > 0);
+}
+
+/**
+ * 启动时预热首页。
+ * 公网部署（Render 免费实例）默认不预热：冷启动时同步抓十几个上游会拖慢启动，
+ * 而且实例可能刚起来就被回收，白抓一遍。需要的话设 DEEPMV_WARMUP=1。
+ */
+export async function warmHome(): Promise<void> {
+  if (process.env.DEEPMV_WARMUP !== '1') return;
+  void getHomeSections();
 }
 
 /** 片单分区在每次响应时动态拼装，预热完成即出现，不影响首页缓存 */
@@ -173,4 +240,4 @@ export async function getHomePublic(force = false): Promise<Section[]> {
   return order.filter((k) => map.has(k)).map((k) => map.get(k)!);
 }
 
-export function invalidateHome() { cache = null; }
+export function invalidateHome() { sectionCache.clear(); }

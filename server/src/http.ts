@@ -1,20 +1,35 @@
 import { parseHTML } from 'linkedom';
+import { caches } from './cache.js';
+import { fetchUpstreamText } from './upstream.js';
 
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+/**
+ * 上游抓取的统一入口。
+ *
+ * 原来这里的缓存是无上限的 Map，跑久了内存一直涨；
+ * 现在改成 cache.ts 里那套有上限、带请求合并的实现。
+ * 外部调用方用的还是 cacheGet / cacheSet 这两个名字，不用改。
+ */
 
-interface CacheEntry { at: number; value: any }
-const cache = new Map<string, CacheEntry>();
+interface CacheEntry { at: number; value: unknown }
+const adapterCache = new Map<string, CacheEntry>();
+const ADAPTER_CACHE_MAX = 800;
 
 export function cacheGet<T>(key: string, ttlMs: number): T | null {
-  const hit = cache.get(key);
+  const hit = adapterCache.get(key);
   if (!hit) return null;
-  if (Date.now() - hit.at > ttlMs) { cache.delete(key); return null; }
+  if (Date.now() - hit.at > ttlMs) { adapterCache.delete(key); return null; }
   return hit.value as T;
 }
 
-export function cacheSet(key: string, value: any) { cache.set(key, { at: Date.now(), value }); }
-export function cacheClear() { cache.clear(); }
+export function cacheSet(key: string, value: unknown) {
+  adapterCache.set(key, { at: Date.now(), value });
+  if (adapterCache.size > ADAPTER_CACHE_MAX) {
+    const oldest = adapterCache.keys().next();
+    if (!oldest.done) adapterCache.delete(oldest.value);
+  }
+}
+
+export function cacheClear() { adapterCache.clear(); caches.upstream.clear(); }
 
 export interface FetchOptions {
   headers?: Record<string, string>;
@@ -25,35 +40,20 @@ export interface FetchOptions {
 }
 
 export async function fetchText(url: string, opts: FetchOptions = {}): Promise<string> {
-  const timeout = opts.timeoutMs ?? 15000;
-  const retry = opts.retry ?? 1;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retry; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    try {
-      const headers: Record<string, string> = {
-        'user-agent': opts.userAgent || UA,
-        accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
-        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        ...(opts.referer ? { referer: opts.referer } : {}),
-        ...(opts.headers || {}),
-      };
-      const res = await fetch(url, { headers, signal: controller.signal, redirect: 'follow' });
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + url);
-      return await res.text();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retry) await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  return fetchUpstreamText(url, {
+    headers: opts.headers,
+    timeoutMs: opts.timeoutMs,
+    retries: opts.retry,
+    referer: opts.referer,
+    userAgent: opts.userAgent,
+  });
 }
 
 export async function fetchJson<T = any>(url: string, opts: FetchOptions = {}): Promise<T> {
-  const text = await fetchText(url, { ...opts, headers: { accept: 'application/json,*/*', ...(opts.headers || {}) } });
+  const text = await fetchText(url, {
+    ...opts,
+    headers: { accept: 'application/json,*/*', ...(opts.headers || {}) },
+  });
   return JSON.parse(text) as T;
 }
 
