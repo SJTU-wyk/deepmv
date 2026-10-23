@@ -126,6 +126,34 @@ DeepMV = **规则引擎 + 多源聚合 + 真实画质探测 + 本地超分播放
 | 本地超分 | 切到「超分标准」后 canvas 1920×1080 接管画面，video 隐藏，画面正常输出 |
 | `/api/proxy` | 200，m3u8 与分片均可走代理播放 |
 
+## 发布状态（实测）
+
+最新一次 tag 触发的流水线 **7 个任务全部通过，耗时 2 分 56 秒**，产物已挂在 Releases：
+
+| 产物 | 大小 | 说明 |
+| --- | --- | --- |
+| `deepmv-android-v0.1.0-unsigned.apk` | 0.6 MB | Android 7.0+，需自行签名或直接侧载 |
+| `deepmv-windows-v0.1.0.zip` | 0.3 MB | 解压双击 `start.cmd` |
+| `deepmv-linux-v0.1.0.tar.gz` | 0.29 MB | 附 systemd unit |
+| `deepmv-web-v0.1.0.tar.gz` | 0.25 MB | 纯静态站点包 |
+| `ghcr.io/sjtu-wyk/deepmv:latest` | — | Docker 镜像，已推到 GHCR |
+
+🔗 https://github.com/SJTU-wyk/deepmv/releases/tag/v0.1.0
+
+两点要注意：
+
+1. **GHCR 包默认是私有的**。要让别人匿名 `docker pull`，需要去 GitHub → 头像 → Your packages → deepmv → Package settings → Change visibility → Public。现在直接 curl manifest 会返回 401，这是正常的权限拦截，不是构建失败。
+2. **APK 未签名**（名字里带 `-unsigned`）。要在 CI 里自动签名，在仓库 Settings → Secrets 里加三个：`ANDROID_KEYSTORE_BASE64`（`base64 -w0 deepmv.jks`）、`ANDROID_KEY_ALIAS`、`ANDROID_KEYSTORE_PASSWORD`。加上之后流水线会自动产出签名版。
+
+### 流水线踩过的四个坑（都已修）
+
+| 报错 | 真实原因 | 修法 |
+| --- | --- | --- |
+| 0 秒失败、0 个任务 | `if:` 里不能用 `secrets` 上下文 | 先落到 `env`，再判断 `env.X != ''` |
+| `repository name must be lowercase` | GitHub 用户名 `SJTU-wyk` 含大写，GHCR 不接受 | 用 `tr '[:upper:]' '[:lower:]'` 转小写 |
+| `android-actions/setup-android` 崩 | 该 action 在 Node 24 runner 上抛运行时异常 | 改用 ubuntu-latest 预装 SDK + `gradle/actions/setup-gradle` |
+| `Duplicate class kotlin.collections.jdk8` | AGP 拖进 kotlin-stdlib-jdk7/jdk8:1.6.21，与 1.8.22 类重复 | `resolutionStrategy` 统一到 1.9.24 + `kotlin-bom` |
+
 ## 平台矩阵
 
 | 平台 | 产物 | 在哪做 | 命令 |
