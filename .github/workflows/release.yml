@@ -186,10 +186,13 @@ jobs:
   # ---------- 7. 汇总发布 ----------
   release:
     needs: [web, windows, linux, docker]
+    # 任一平台构建失败也不阻塞发布：已有的产物照样发出去
+    if: always() && needs.web.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
+        continue-on-error: true
       - name: 列出产物
         run: find artifacts -type f | head -20
       - uses: softprops/action-gh-release@v2
