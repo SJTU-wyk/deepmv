@@ -1,0 +1,19 @@
+services:
+  deepmv:
+    build: .
+    image: deepmv:latest
+    container_name: deepmv
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7821:7821"     # 只绑回环，让 Nginx/Caddy 反代；不要直接暴露 7821
+    environment:
+      DEEPMV_MODE: public
+      DEEPMV_KEY: ${DEEPMV_KEY:-}          # 需要共享口令就填
+      DEEPMV_CORS: ${DEEPMV_CORS:-}        # 允许的站点来源，逗号分隔
+      DEEPMV_RATE: ${DEEPMV_RATE:-90}      # 每 IP 每分钟请求数
+      ALLOW_PROXY: "0"                      # 公网环境保持 0：不开视频代理
+    volumes:
+      - ./server/rules:/app/server/rules:ro
+      - ./server/share:/app/server/share
+    mem_limit: 700m
+    cpus: "1.0"

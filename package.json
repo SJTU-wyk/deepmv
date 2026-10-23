@@ -1,0 +1,15 @@
+{
+  "name": "deepmv",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DeepMV - 基于自定义规则的影视聚合客户端（欧美电影剧集 / 国产经典高分）",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm -C server dev\" \"pnpm -C web dev\"",
+    "build": "pnpm -C web build",
+    "start": "pnpm -C server start",
+    "preview": "pnpm -C server start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

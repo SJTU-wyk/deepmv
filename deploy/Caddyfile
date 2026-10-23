@@ -1,0 +1,30 @@
+# Caddy 自动申请并续期 HTTPS 证书，比 Nginx + certbot 少一半配置
+# 把 deepmv.example.com 换成你的域名，DNS 的 A 记录指向服务器公网 IP
+deepmv.example.com {
+    encode gzip zstd
+
+    # 只反代 API 与页面，不暴露视频代理
+    handle /api/* {
+        reverse_proxy 127.0.0.1:7821 {
+            transport http {
+                read_timeout 60s
+            }
+        }
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:7821
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer-when-downgrade"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/deepmv.log
+        format json
+    }
+}

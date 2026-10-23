@@ -1,0 +1,2 @@
+-keep class app.deepmv.client.** { *; }
+-keepattributes JavascriptInterface

@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile --config.strictDepBuilds=false
+      - name: 类型检查（后端）
+        run: pnpm --filter @deepmv/server exec tsc --noEmit
+      - name: 类型检查 + 构建（前端）
+        run: pnpm --filter @deepmv/web build
+      - name: 冒烟测试（启动服务并打接口）
+        run: |
+          cd server
+          npx tsx src/index.ts &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:7821/api/health > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          curl -sf http://127.0.0.1:7821/api/sources > /dev/null
+          curl -sf "http://127.0.0.1:7821/api/search?q=%E9%9C%B8%E7%8E%8B%E5%88%AB%E5%A7%AC" > /dev/null
+          kill $SERVER_PID

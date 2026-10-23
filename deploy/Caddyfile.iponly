@@ -1,0 +1,17 @@
+# 没有域名时：Caddy 用自签证书，浏览器会提示不安全，但流量仍加密
+# 适合先跑通再补域名
+
+:443 {
+    tls internal
+    encode gzip
+    handle /api/* {
+        reverse_proxy 127.0.0.1:7821
+    }
+    handle {
+        reverse_proxy 127.0.0.1:7821
+    }
+    header {
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}
