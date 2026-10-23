@@ -1,0 +1,29 @@
+# Render Blueprint —— 不用服务器也能让别人访问
+#
+# 用法：把仓库推到 GitHub 后，在 Render 里选 New → Blueprint，指向这个仓库。
+# Render 会照着这份配置建服务，几分钟后给你一个带 HTTPS 的公开地址。
+#
+# 免费档注意：实例闲置 15 分钟后休眠，下次访问要等 30~60 秒唤醒。
+# 做长期公开站点，还是用 deploy/install.sh 装到自己的服务器上更稳。
+
+services:
+  - type: web
+    name: deepmv
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    healthCheckPath: /api/health
+    envVars:
+      - key: DEEPMV_MODE
+        value: public
+      # 不设口令就是任何人可访问。想让朋友自己用就设一个随机串
+      - key: DEEPMV_KEY
+        sync: false
+      - key: DEEPMV_RATE
+        value: "90"
+      # 视频代理在公网环境关掉：出站流量免费额度扛不住
+      - key: ALLOW_PROXY
+        value: "0"
+      - key: NODE_ENV
+        value: production

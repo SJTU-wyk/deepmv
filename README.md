@@ -1,222 +1,144 @@
 # DeepMV
 
-> 受 [Kazumi](https://github.com/Predidit/Kazumi) 的「规则驱动」思路启发做的**影视聚合客户端**，聚焦欧美电影剧集与国产经典高分片库，画质优先级贯穿全链路。
+影视聚合播放器。规则驱动多源检索，播放前读一遍 HLS 清单确认真实分辨率，顺手把片源里插的广告切掉。
 
-DeepMV = **规则引擎 + 多源聚合 + 真实画质探测 + 本地超分播放器**。
-它不像普通采集壳那样只在某个站点里搜，而是把同一部片在所有片源里横向比一遍，**只信 HLS 清单里的 `RESOLUTION`，不信站点自报的「HD / 超清 / 蓝光」标签**，最后把能播且分辨率最高的那条线路交给你。
+起因是想要一个能在电视盒子、旧笔记本、手机浏览器上都能用的看片工具。Kazumi 的思路很好，但它是 Flutter 客户端，我只想开个网页就能用，就照它的规则体系重写了一个服务端版本。
 
----
+## 先部署，再看别的
 
-## 先回答一个常见疑问：Kazumi 有没有中转服务器
+这个项目本来就是为了让别人也能访问，所以部署放在最前面。
 
-没有。我把它的仓库、pubspec 依赖和 release workflow 都读完了，可以确定：
+### 有自己的服务器（推荐，长期公开用这台）
 
-| 疑问 | 事实 |
-| --- | --- |
-| 番剧走"渠道服务器"吗 | **不走**。Kazumi 是纯客户端，没有视频中转服务端 |
-| 调迅雷 / BT 资源吗 | **没有**。全仓库搜不到 torrent / magnet / ed2k / xunlei 任何相关依赖或代码 |
-| 那它为什么又快又清晰 | 它用 **media_kit（libmpv）做原生播放器**，不是浏览器。原生播放器**不受 CORS 限制**，可以带着 UA 和 Referer 直连片源 CDN，所以既没有中转、也没有跨域问题 |
-| 它的"多源"从哪来 | 从规则仓库装。KazumiRules 仓库有 17 条规则，每条指向一个站点，规则多了可选源就多 |
+Ubuntu 22.04 / 24.04 或 Debian 12，一行命令：
 
-**DeepMV 的处境和它不同**：网页版跑在浏览器里，受 CORS 约束——CDN 不给 `Access-Control-Allow-Origin` 时浏览器根本拿不到数据。所以 DeepMV 必须有一个"能直连就直连、不能直连才中转"的判断层。
-
-这一层现在已经做好了，见下面的「性能」一节。
-
-## 从 Kazumi 学到的东西
-
-| Kazumi 的做法 | DeepMV 的对应实现 |
-| --- | --- |
-| 一条规则最多五行 XPath，只支持 `//` 开头的选择器 | `server/src/xpath.ts`：自实现精简 XPath 引擎，支持 `//` `@attr` `text()` `[n]` `[@a]` `[@a='v']` `[contains(@a,'v')]` `[starts-with]` `[not(...)]` |
-| 规则分 XPath 规则 / API 规则，可混搭 | `server/src/adapters/`：`maccms`（苹果 CMS JSON/XML 接口）、`xpath`（网页选择器）、`archive`（Internet Archive）三种适配器，一条规则可自由选择 |
-| 规则仓库导入、剪贴板导入、分享链接 | `server/rules/presets.json` 内置片源 + `server/rules/custom/*.json` 目录热加载自定义规则 |
-| 视频嗅探（把规则带到播放页，程序自己找媒体流） | `server/src/proxy.ts` 的 `sniffFromPage()`：正则 + JSON 字段扫描出 m3u8/mp4 直链 |
-| Anime4K 实时超分 | `web/src/upscale.ts`：WebGL 片上高斯低通 + 高频回注 + S 曲线，三档（关 / 标准 / 强力） |
-| Flutter 跨端 | 改成 **Node 服务 + 浏览器前端**，任何设备开浏览器就能用（含电视盒子） |
-
-差异点：Kazumi 只求「能播」，DeepMV 多做了**分辨率真伪校验**和**跨源自动择优**，这正是「分辨率要最高最好」的实现方式。
-
----
-
-## 功能
-
-- **首页聚合**：欧美电影 / 欧美剧集 / 国产电影 / 国产剧集 / 高分 8.0+ / 国产经典 / 口碑国剧 / 欧美经典 / 口碑美剧 / 邵氏港片 / 纪录片，11 个分区；多源合并去重、同剧多季折叠，按豆瓣分（差 ≥0.3 才换位）→ 画质 → 多源覆盖度排序
-- **全源搜索**：7 个源并行检索，同名条目自动合并，卡片角标显示「+N 源」
-- **详情页真实探测**：进入详情自动探测每条线路首集的 HLS master playlist，读出 `RESOLUTION=1920x1080` 这类真实分辨率，不可用的线路直接标「不可用」
-- **全源找最高画质**：一键把同一部片在所有源里跑一遍，返回能播且分辨率最高的那条
-- **整源失效自动切换**：当前源全部线路 403/404 时，自动跳到其它源里最高的那条，不需要手动找
-- **播放器**：hls.js + 原生 HLS 回退、10 秒快进快退、倍速、选集、线路切换、键盘快捷键（空格 / ←→ / N）
-- **本地超分**：WebGL 实时处理，1080P 以下片源提升明显
-- **精选片单**：国产经典（霸王别姬、活着、阳光灿烂的日子…）、国产剧高分经典（西游记 1986、红楼梦 1987、大明王朝 1566、走向共和…）、欧美影史名片、欧美口碑长剧；片单只存「片名 + 年份」，播放源多源实时解析并严格按年份对齐，永不失效
-- **历史 / 收藏**：本地 localStorage
-
-## 性能、画质与广告（本轮修复）
-
-### 一、卡顿：根因是每一帧都在重渲染 + 每个分片都走中转
-
-实测数据：
-
-| 项目 | 修复前 | 修复后 |
-| --- | --- | --- |
-| 同一分片获取 | 走 Node 中转 1859 ms | 浏览器直连 CDN 806 ms |
-| 播放进度更新 | `timeupdate` 每秒 4 次 setState，整棵组件树重渲染 | rAF 直写 DOM，不再触发 React 渲染 |
-| 首页 JS | 单包 839 KB（含 hls.js） | 220 KB，hls.js 拆到播放页才加载 |
-| 首页资源 | 36 个请求 / 381 KB | 同样轻量，图片加服务端缓存 |
-| 海报图 | 每次回源，单张 0.8~2 s | 服务端磁盘缓存，命中 27 ms |
-| 长列表滚动 | 所有分区都参与布局 | `content-visibility: auto`，屏外不绘制 |
-
-三层改动：
-
-1. **播放器不再逐帧 setState**（`web/src/pages/Player.tsx`）——进度条用 ref + `requestAnimationFrame` 直接改 DOM
-2. **路由级代码分割**（`web/src/main.tsx`）——hls.js 只在进播放页时下载
-3. **分片直连 + 清单走代理**（`server/src/proxy.ts`）——只有"下一层清单"需要被重写（清广告），分片一律直连 CDN。一部电影 5000+ 分片，只有 1 个清单过代理
-
-```
-/api/resolve 返回 mode 字段：
-  direct   —— CDN 给了 CORS 头，浏览器直连，零中转
-  manifest —— 直连但清单要走代理清广告（分片仍直连）
-  proxy    —— CDN 不给 CORS，整条走中转
+```bash
+git clone https://github.com/SJTU-wyk/deepmv.git
+cd deepmv
+sudo bash deploy/install.sh --domain mv.example.com --email you@example.com
 ```
 
-### 二、广告：广告是拼进 m3u8 清单里的
+没域名就 `sudo bash deploy/install.sh`，先用 IP 加自签证书跑通。
 
-实测《奥本海默》的清单：
+脚本装 Node 20、构建前端、注册 systemd、装 Caddy 反代、申请证书、配防火墙，跑完把访问地址和访问口令打印出来。第二次运行会 git pull 后重新构建，可以当更新用。
+
+部署前确认两件事：域名的 A 记录指向服务器公网 IP；云厂商安全组放行 80 和 443。Azure 的在「网络 → 网络安全组」里加。
+
+### 没有服务器
+
+仓库里有 `render.yaml`。在 Render 选 New → Blueprint，指向这个仓库，几分钟后拿到一个 https 地址。免费档闲置 15 分钟会休眠，下次访问要等半分钟唤醒，给人看一眼够用。
+
+也可以 `fly launch --copy-config`，免费额度是 3 台 256MB 实例，不会休眠。
+
+### 只在自己电脑上跑
+
+```bash
+pnpm install --config.strictDepBuilds=false
+pnpm build && pnpm start
+```
+
+打开 http://127.0.0.1:7821。默认只监听回环地址，同一个局域网的其他设备也连不上。
+
+### 公开访问前设一个口令
+
+不设 `DEEPMV_KEY` 的话，知道地址的人都能用你的服务器。设上之后所有接口要带 `?key=`：
+
+```bash
+# /etc/deepmv.env
+DEEPMV_KEY=你的口令
+DEEPMV_RATE=90          # 每 IP 每分钟请求上限
+ALLOW_PROXY=0           # 公网保持关闭，原因见下
+```
+
+**为什么默认关掉视频代理**：Azure 免费额度大概 100 GB 出站流量，一部 1080P 电影 2 到 4 GB。如果观众的每一帧视频都从你的服务器过一遍，二十几部片就把整月额度吃光。
+
+关掉代理后，服务器只返回几十 KB 的 JSON，视频由观众自己的设备直连片源 CDN。这个取舍在 `server/src/guard.ts` 里。内网自用想开代理，把 `ALLOW_PROXY` 改成 1。
+
+## 画质这件事
+
+站点标签写的「HD」「超清」「蓝光」不能信。同一部《霸王别姬》，有的源标着 1080P，实际清单里只有 1280x692。
+
+所以要读清单。HLS 的 master playlist 里有 `RESOLUTION=1920x1080` 这样的字段，这是片源自己声明的，比页面上印的标签可靠。详情页打开时会自动探一遍每条线路的首集，把不可用的直接标出来。
+
+实测：
 
 ```
-主片   /20240924/5pBdFnaw/2000kb/hls   → 10821 秒，5485 个唯一分片
-广告   /20261009/KqUe4B8N/10152kb/hls  → 176 秒，9 个唯一分片各重复 10 次
-共 19 个 #EXT-X-DISCONTINUITY 插入点
-```
-
-判据不是关键词，而是三条可量化特征（`server/src/adblock.ts`）：
-
-1. 分片 URI 重复出现（正常片源不会重复同一个 .ts）
-2. 某个路径簇分片种类极少却占大量槽位
-3. 该簇总时长远小于主片，且被拆散插在中间
-
-**实测结果**：删掉 90 个广告分片 / 176 秒，正片 180.3 分钟完整保留，清理后无重复分片，响应头带 `x-deepmv-ads-removed: 90`。
-
-### 三、画质：不信任站点标签，只信 HLS 清单里的 RESOLUTION
-
-源从 7 个扩到 9 个，并给每个源标注了 CDN 是否给 CORS 头：
-
-```
-霸王别姬 → 光速资源 1080P 1920x1080 [直连]   （修复前：540P 1280x692）
-流浪地球 → 魔都资源 2K  3840x1608 [直连]
+霸王别姬 → 光速资源 1080P 1920x1080 [直连]
+流浪地球 → 魔都资源 2K   3840x1608 [直连]
 奥本海默 → 魔都资源 1080P 1920x1080 [直连]
 ```
 
-详情页新增**画质升级提示条**：当前源实测低于 1080P 时，自动全源找更高的，摆一个「切到高画质」按钮。
+全源找最高画质走 `/api/best`：把同一部片在所有源里跑一遍，并发探测每条线路的首集，按真实高度排序返回。详情页有个按钮，当前源低于 1080P 时会自动提示切换到更高的。
 
-已修的画质相关细节：
-- 采集站的「HD / 超清 / 蓝光」标签一律按 1080P 计，但**不会被当成结论**，最终以探测结果为准
-- `/share/` 形式的分享页线路（ffzy 等站点）在解析阶段就丢掉，不再占用线路位
-- 成人分区（伦理 / 里番 / 三级）在适配器层过滤，片库保持干净
-- 搜索结果按纯片名匹配度打分（完全一致 100 / 前缀 80 / 包含 60），「奥本海默」不会再被「终结一切战争：奥本海默和原子弹」挤掉
+浏览器里还能开一层 WebGL 处理，高斯低通取低频，原图减低频得高频，再把高频按倍数加回去，最后走一遍 S 曲线。三档，420P 到 720P 的老片源开「强力」之后清楚不少。这不是模型超分，是着色器锐化，但对老片够用。
 
----
+## 广告
 
-## 已验证的事实（不是承诺）
+采集站的广告不是插在播放器里的，是直接拼进 m3u8 清单的。
 
-| 检查 | 结果 |
-| --- | --- |
-| 首页 11 个分区 | 全部有数据，暖缓存响应 2~6 ms |
-| `/api/best?q=奥本海默` | 3.7 s 内返回「魔都资源 1080P 1920×1080」，另带 1 条备选 |
-| `/api/best?q=霸王别姬` | 返回「魔都资源 540P 1280×692」——站点自报 HD，实测只有 540P，正是这套探测要解决的 |
-| 播放器 | `videoWidth=1920 videoHeight=1080`，`currentTime` 正常推进，时长 10996 s |
-| 本地超分 | 切到「超分标准」后 canvas 1920×1080 接管画面，video 隐藏，画面正常输出 |
-| `/api/proxy` | 200，m3u8 与分片均可走代理播放 |
+拿《奥本海默》的清单举例，里面有两个完全不同路径的分片簇：
 
-## 发布状态（实测）
+```
+主片  /20240924/5pBdFnaw/2000kb/hls    10821 秒，5485 个唯一分片
+广告  /20261009/KqUe4B8N/10152kb/hls    176 秒，9 个分片各重复 10 次
+```
 
-最新一次 tag 触发的流水线 **7 个任务全部通过，耗时 2 分 56 秒**，产物已挂在 Releases：
+19 个 `#EXT-X-DISCONTINUITY` 插入点。判据不用关键词，看三件事：分片 URI 有没有重复（正常片源不会重复同一个 .ts）、某个路径簇是不是分片种类极少却占了很多槽位、这个簇的总时长是不是远小于主片还被拆散插在中间。
 
-| 产物 | 大小 | 说明 |
-| --- | --- | --- |
-| `deepmv-android-v0.1.0-unsigned.apk` | 0.6 MB | Android 7.0+，需自行签名或直接侧载 |
-| `deepmv-windows-v0.1.0.zip` | 0.3 MB | 解压双击 `start.cmd` |
-| `deepmv-linux-v0.1.0.tar.gz` | 0.29 MB | 附 systemd unit |
-| `deepmv-web-v0.1.0.tar.gz` | 0.25 MB | 纯静态站点包 |
-| `ghcr.io/sjtu-wyk/deepmv:latest` | — | Docker 镜像，已推到 GHCR |
+`server/src/adblock.ts` 按这个规则删，那部片删掉 90 个分片、176 秒，正片 180.3 分钟完整留着。响应头会带 `x-deepmv-ads-removed: 90`。
 
-🔗 https://github.com/SJTU-wyk/deepmv/releases/tag/v0.1.0
+## 卡顿是怎么修的
 
-两点要注意：
+第一版很卡。查下来是三个原因叠在一起。
 
-1. **GHCR 包默认是私有的**。要让别人匿名 `docker pull`，需要去 GitHub → 头像 → Your packages → deepmv → Package settings → Change visibility → Public。现在直接 curl manifest 会返回 401，这是正常的权限拦截，不是构建失败。
-2. **APK 未签名**（名字里带 `-unsigned`）。要在 CI 里自动签名，在仓库 Settings → Secrets 里加三个：`ANDROID_KEYSTORE_BASE64`（`base64 -w0 deepmv.jks`）、`ANDROID_KEY_ALIAS`、`ANDROID_KEYSTORE_PASSWORD`。加上之后流水线会自动产出签名版。
+分片走了服务端中转。同一片 361KB 的内容，浏览器直连 CDN 是 806ms，过一遍 Node 是 1859ms。改成只有「下一层清单」走服务端（因为广告要在那里重写），分片一律直连。一部电影 5000 多个分片，只有 1 个清单过代理。
 
-### 流水线踩过的四个坑（都已修）
+播放进度每秒 setState 四次，每次都把整棵组件树重渲染一遍，包括几百个选集按钮。改成用 ref 加 `requestAnimationFrame` 直接改 DOM，只在切集、暂停、报错这些真的要重绘的时候才动 React 状态。
 
-| 报错 | 真实原因 | 修法 |
-| --- | --- | --- |
-| 0 秒失败、0 个任务 | `if:` 里不能用 `secrets` 上下文 | 先落到 `env`，再判断 `env.X != ''` |
-| `repository name must be lowercase` | GitHub 用户名 `SJTU-wyk` 含大写，GHCR 不接受 | 用 `tr '[:upper:]' '[:lower:]'` 转小写 |
-| `android-actions/setup-android` 崩 | 该 action 在 Node 24 runner 上抛运行时异常 | 改用 ubuntu-latest 预装 SDK + `gradle/actions/setup-gradle` |
-| `Duplicate class kotlin.collections.jdk8` | AGP 拖进 kotlin-stdlib-jdk7/jdk8:1.6.21，与 1.8.22 类重复 | `resolutionStrategy` 统一到 1.9.24 + `kotlin-bom` |
+首页 JS 一个包 839 KB，hls.js 占了大头，而首页根本用不到。改成路由级分割，hls.js 只在进播放页时下载，首页降到 220 KB。海报图也做了服务端磁盘缓存，第一次回源 0.8 到 2 秒，之后 27ms。
 
-## 平台矩阵
+长列表加了 `content-visibility: auto`，屏幕外的分区不参与布局。
 
-| 平台 | 产物 | 在哪做 | 命令 |
+## 播放源
+
+内置 9 个：
+
+| id | 名称 | 类型 | 备注 |
 | --- | --- | --- | --- |
-| Web | 静态包 / 直接跑服务 | 本地 | `pnpm build && pnpm start` |
-| Docker | `ghcr.io/<你>/deepmv` | 本地或 CI | `docker compose up -d` |
-| Windows | 便携 zip | 本地 / Actions | 解压双击 `start.cmd` |
-| Linux | tar.gz + systemd unit | Actions（交叉编译） | 见 `deploy/systemd/` |
-| Android | APK | 本地（JDK17+SDK）/ Actions | `gradlew assembleRelease` |
-| iOS | IPA | **只能 GitHub Actions（macOS runner）** | 见 `docs/DEPLOY.md` |
-| macOS | dmg | **只能 GitHub Actions（macOS runner）** | 同上 |
+| modu | 魔都资源 | maccms | 直连 CORS 通，1080P |
+| rycz | 日月采集 | maccms | 直连 CORS 通 |
+| guangsu | 光速资源 | maccms | 直连 CORS 通，新片快 |
+| zuid | 最大资源 | maccms | 片库大，部分 CDN 限地区 |
+| ffzy | 非凡资源 | maccms | 更新快 |
+| bdzy | 百度资源 | maccms | 有 4K 电影专区、邵氏片库 |
+| wujin | 无尽资源 | maccms | Netflix 分区、邵氏片库 |
+| lzi | 量子资源 | maccms | 老片多 |
+| archive | Internet Archive | archive | 公有领域欧美老片 |
 
-推一个 tag 就会自动构建并发布：
+每个源在 `presets.json` 里标了 `cors`。标记为 true 的表示 CDN 会给 `Access-Control-Allow-Origin`，浏览器能直连，`/api/best` 会优先探这些。
 
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
+这些是公开的苹果 CMS 采集接口。接口地址和可用性由第三方决定，随时可能失效，失效了换一条规则就行。
 
-本地 vs 服务器 vs CI 的完整分工、Azure 免费额度怎么算、公网安全怎么做，全写在 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
+### 加自己的源
 
-## 快速开始
+扔个 JSON 到 `server/rules/custom/`，重启或者 `POST /api/sources/reload`。
 
-```bash
-# 1. 安装依赖（Node 18+ / pnpm）
-pnpm install --config.strictDepBuilds=false
-
-# 2. 开发模式（前端 7822 热更新，后端 7821）
-pnpm dev
-
-# 3. 生产模式：先构建再启动（单端口 7821 同时托管前端与 API）
-pnpm build
-pnpm start
-```
-
-打开 <http://127.0.0.1:7821>。
-
-Windows 下双击 `start.cmd` 也行。
-
----
-
-## 规则格式
-
-和 Kazumi 一样，一条规则描述「怎么搜、怎么拿线路」。DeepMV 的扩展字段是 `adapter` 和 `categoryMap`。
+苹果 CMS 接口的最简单，只要 baseURL 和分区映射：
 
 ```json
 {
-  "name": "某采集站",
-  "version": "1.0",
-  "type": "movie",
+  "id": "mysource",
+  "name": "我的源",
   "baseURL": "https://api.example.com",
   "adapter": "maccms",
-  "bestQuality": "1080P",
   "categoryMap": {
     "westernMovie": ["6", "7", "8"],
-    "westernTv": ["16"],
-    "cnMovie": ["6", "11"],
-    "cnTv": ["13"],
-    "fourK": ["62"]
+    "cnTv": ["13"]
   }
 }
 ```
 
-XPath 规则（`adapter: "xpath"`）：
+网页站要用 XPath 规则，选择器语法和 Kazumi 一样：
 
 ```json
 {
@@ -232,65 +154,100 @@ XPath 规则（`adapter: "xpath"`）：
 }
 ```
 
-- `baseURL` 指向苹果 CMS 站点根时，自动拼 `/api.php/provide/vod/`
-- 自定义规则放到 `server/rules/custom/`，重启或 POST `/api/sources/reload` 生效
-- 选择器语义与 Kazumi 一致：`searchName` / `searchResult` 相对 `searchList` 节点取；`chapterResult` 相对 `chapterRoads` 节点取
+选择器支持 `//`、`@attr`、`text()`、`[n]`、`[@a]`、`[@a='v']`、`[contains(@a,'v')]`、`[starts-with]`、`[not(...)]`。自己写的引擎在 `server/src/xpath.ts`，没引第三方库。
 
----
+## 接口
 
-## API
-
-| 方法 | 路径 | 说明 |
+| 方法 | 路径 | 做什么 |
 | --- | --- | --- |
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/sources` | 已加载规则列表 |
-| POST | `/api/sources/reload` | 重载 `server/rules` |
-| GET | `/api/home?refresh=1` | 首页分区（15 分钟缓存） |
-| GET | `/api/search?q=` | 多源搜索 + 合并 |
-| GET | `/api/detail/:source/:id` | 详情 + 线路 + 选集 |
-| GET | `/api/best?q=&skip=` | **全源找能播的最高画质** |
-| GET | `/api/best-road/:source/:id` | 单条目内各线路真实分辨率 |
-| GET | `/api/probe?url=` | 探测单个 m3u8 的 RESOLUTION |
-| GET | `/api/resolve?url=` | 直链直用 / 网页嗅探 |
-| GET | `/api/proxy?u=` | HLS 代理（重写片段与密钥 URI，解决跨域与 Referer 校验） |
-| GET | `/api/collections` / `/api/collections/:id` | 精选片单 |
+| GET | `/api/health` | 健康检查，公网模式下唯一不需要口令的接口 |
+| GET | `/api/home` | 首页 11 个分区，15 分钟缓存 |
+| GET | `/api/search?q=` | 多源搜索，同名条目合并 |
+| GET | `/api/detail/:source/:id` | 详情、线路、选集 |
+| GET | `/api/best?q=` | 全源找能播的最高画质 |
+| GET | `/api/best-road/:source/:id` | 单条目内每条线路的真实分辨率 |
+| GET | `/api/probe?url=` | 探一个 m3u8 的 RESOLUTION |
+| GET | `/api/resolve?url=` | 返回 direct / manifest / proxy 三种播放模式 |
+| GET | `/api/proxy?u=` | 清单代理与广告清除 |
+| GET | `/api/img?u=` | 海报缓存 |
+| GET | `/api/collections` | 精选片单 |
+| POST | `/api/share/rules` | 上传规则，需要口令 |
 
-`/api/best` 是核心：并行拉取同名条目在所有源的线路 → 并发探测每条首集 → 按真实高度排序，返回 `best` 与 `alternatives`。
+`/api/resolve` 返回的 `mode` 决定播放方式：
 
----
+```
+direct    CDN 有 CORS 头，浏览器直连，服务端不参与
+manifest  浏览器直连，但清单走服务端清广告（分片仍直连）
+proxy     CDN 没有 CORS 头，整条走中转
+```
 
 ## 目录
 
 ```
-deepmv/
-├── server/
-│   ├── rules/
-│   │   ├── presets.json        # 内置片源规则
-│   │   └── custom/             # 自定义规则（Kazumi 格式可直接放进来）
-│   └── src/
-│       ├── index.ts            # Fastify 入口 + 全部路由
-│       ├── xpath.ts            # 精简 XPath 引擎
-│       ├── http.ts             # 抓取 / 缓存 / 苹果CMS XML 解析
-│       ├── adapters/           # maccms / xpath / archive
-│       ├── aggregate.ts        # 多源合并、相关性、超时控制
-│       ├── curated.ts          # 首页分区
-│       ├── collections.ts      # 精选片单定义
-│       ├── picks.ts            # 片单解析（片名 → 可播源）
-│       ├── resolve.ts          # 全源择优
-│       ├── probe.ts            # HLS 分辨率探测
-│       └── proxy.ts            # HLS 代理 + 网页嗅探
-└── web/
-    └── src/
-        ├── pages/              # Home / Search / Detail / Player / Collections / Sources
-        ├── components/Poster.tsx
-        ├── upscale.ts          # WebGL 超分
-        └── styles.css
+server/
+  src/
+    xpath.ts        精简 XPath 引擎
+    adapters/       maccms / xpath / archive 三种适配器
+    aggregate.ts    多源合并、相关性打分、超时控制
+    probe.ts        读 HLS 清单拿真实分辨率
+    adblock.ts      广告簇识别与清除
+    proxy.ts        清单重写、CORS 探测、网页嗅探
+    imgcache.ts     海报磁盘缓存
+    resolve.ts      全源择优
+    guard.ts        运行模式、限流、口令
+    picks.ts        片单解析
+  rules/
+    presets.json    内置源
+    custom/         自定义规则
+web/
+  src/
+    pages/          Home / Search / Detail / Player / Collections / Sources
+    upscale.ts      WebGL 锐化
+    api.ts
+deploy/
+  install.sh        一键部署
+  README.md         三种部署方式对比
+mobile/android/     Android WebView 壳
 ```
 
----
+## 打包
+
+推 tag 触发 GitHub Actions，七个任务并行：verify、web、windows、linux、docker、android、release，实测 2 分 56 秒跑完。
+
+产物挂在 Releases：
+
+| 文件 | 大小 |
+| --- | --- |
+| deepmv-android-v0.1.0-unsigned.apk | 0.6 MB |
+| deepmv-windows-v0.1.0.zip | 0.3 MB |
+| deepmv-linux-v0.1.0.tar.gz | 0.29 MB |
+| deepmv-web-v0.1.0.tar.gz | 0.25 MB |
+| ghcr.io/sjtu-wyk/deepmv:latest | Docker 镜像 |
+
+三点提醒：
+
+GHCR 的包默认私有，要让别人匿名 `docker pull`，去 GitHub 的 Your packages → deepmv → Package settings 改成 Public。现在直接访问会返回 401，是权限拦截不是构建失败。
+
+APK 目前没签名，文件名带 `-unsigned`。想自动签名，在仓库 Secrets 里加 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_KEYSTORE_PASSWORD`。
+
+iOS 和 macOS 包需要 macOS runner，本地 Windows 编不了，得走 Actions。
+
+流水线踩过的坑记在 `docs/DEPLOY.md` 里，主要是 GitHub 不允许在 `if` 里用 `secrets` 上下文、GHCR 不接受含大写的用户名、Android 那几个 action 在 Node 24 runner 上会崩。
+
+## 关于 Kazumi
+
+读它的源码时确认了几件事，我原本也以为它有什么中转服务器。
+
+它没有服务端，纯客户端。全仓库搜不到 torrent、magnet、ed2k、xunlei 相关的依赖或代码，也不碰 BT 资源。
+
+它快是因为用 media_kit（libmpv）做原生播放器。原生播放器不受 CORS 约束，可以带 UA 和 Referer 直连片源 CDN，所以既不用中转也没有跨域问题。
+
+DeepMV 是网页版，受 CORS 约束，CDN 不给头的时候浏览器拿不到数据，必须有一层判断。这就是 `/api/resolve` 那个 direct / manifest / proxy 的由来。
+
+它的多源来自规则仓库，KazumiRules 里 17 条规则，每条指一个站点。
 
 ## 说明
 
-- 片源来自公开的采集接口，接口地址、可用性由第三方决定，随时可能失效；失效时换一条规则即可
-- 不做破解、不去 DRM、不碰盗链鉴权，只做「把公开接口里已有的线路聚合好、把真实画质挑出来」
-- 影视内容版权归各权利人所有，本项目仅供本地学习、接口联调与个人技术验证使用
+片源来自公开的采集接口，接口由第三方维护，可用性不由本项目控制。项目不做破解、不去 DRM、不碰盗链鉴权，只做接口聚合和画质甄别。
+
+影视内容版权归各权利人所有，本项目仅供本地技术验证使用。

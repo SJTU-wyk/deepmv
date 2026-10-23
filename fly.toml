@@ -1,0 +1,34 @@
+# Fly.io 部署配置
+#   fly launch --copy-config --no-deploy
+#   fly secrets set DEEPMV_KEY=你自己想的口令
+#   fly deploy
+#
+# 免费额度：3 台 shared-cpu-1x 256MB 实例。不自动休眠，比 Render 免费档更适合做公开站点。
+
+app = "deepmv"
+primary_region = "hkg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  DEEPMV_MODE = "public"
+  DEEPMV_RATE = "90"
+  ALLOW_PROXY = "0"
+
+[http_service]
+  internal_port = 7821
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
