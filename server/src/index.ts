@@ -10,11 +10,12 @@ import { getHomePublic, invalidateHome, warmHome } from './curated.js';
 import { COLLECTIONS, getCollection } from './collections.js';
 import { getPicks, getPickOverview, startWarmup } from './picks.js';
 import { bestPlay, bestRoadOf } from './resolve.js';
-import { proxyFetch, toNodeStream, sniffFromPage, proxyPath } from './proxy.js';
+import { proxyFetch, toNodeStream, sniffFromPage, proxyPath, canPlayDirect } from './proxy.js';
 import { probeHls, heightLabel } from './probe.js';
 import { type SearchItem } from './types.js';
 import { MODE, ALLOW_PROXY, corsConfig, evaluate, clientIp } from './guard.js';
 import { listSharedRules, readSharedRule, writeSharedRule } from './share.js';
+import { getImage, imgPath } from './imgcache.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7821);
@@ -93,7 +94,7 @@ app.get('/api/detail/:source/:id', async (req, reply) => {
   try {
     const adapter = getAdapter(rule);
     const detail = await withTimeout(adapter.detail(rule, decodeURIComponent(id)), 18000, '详情超时');
-    if (!detail) return reply.code(404).send({ error: '未找到条目' });
+    if (!detail) return reply.code(404).send({ error: '未找到条目（或该条目属于已被过滤的分区）' });
     return detail;
   } catch (err) {
     return reply.code(502).send({ error: String(err).slice(0, 200) });
@@ -129,17 +130,42 @@ app.get('/api/probe', async (req, reply) => {
   return { ...result, label: result.label || heightLabel(result.height) };
 });
 
+/**
+ * 解析播放地址。
+ *
+ * 关键策略：**能直连就直连**。
+ * 浏览器直连 CDN 少一跳，实测同一分片 806ms vs 走代理 1859ms。
+ * 只有当 CDN 不给 CORS 头（浏览器会被拦）时才退回代理。
+ */
 app.get('/api/resolve', async (req, reply) => {
   const target = String((req.query as any)?.url ?? '');
   if (!/^https?:\/\//.test(target)) return reply.code(400).send({ error: '非法地址' });
+  const forceProxy = (req.query as any)?.proxy === '1';
+  const adblock = (req.query as any)?.adblock !== '0';
   try {
-    if (/\.(m3u8|mp4|flv|webm)(\?|$)/i.test(target)) {
-      return { type: /\.m3u8/i.test(target) ? 'hls' : 'mp4', url: proxyPath(target), source: target };
+    let mediaUrl = target;
+    let type: 'hls' | 'mp4' | 'page' = /\.m3u8/i.test(target) ? 'hls' : /\.(mp4|flv|webm)(\?|$)/i.test(target) ? 'mp4' : 'page';
+    let sniffed: { url: string; type: 'hls' | 'mp4' }[] = [];
+
+    if (type === 'page') {
+      sniffed = await sniffFromPage(target);
+      const hls = sniffed.find((s) => s.type === 'hls') ?? sniffed[0];
+      if (!hls) return { type: 'page', url: target, sniffed: [], mode: 'none' };
+      mediaUrl = hls.url;
+      type = hls.type;
     }
-    const sniffed = await sniffFromPage(target);
-    const hls = sniffed.find((s) => s.type === 'hls') ?? sniffed[0];
-    if (hls) return { type: hls.type, url: proxyPath(hls.url), source: hls.url, sniffed: sniffed.slice(0, 6) };
-    return { type: 'page', url: target, sniffed: [] };
+
+    // 广告清除必须走代理（清单要重写）；直连时把清理逻辑放到客户端做不到，
+    // 所以只在「必须代理」或「用户显式要求清广告」时套代理。
+    const directOk = !forceProxy && await canPlayDirect(mediaUrl);
+    if (directOk && !adblock) {
+      return { type, url: mediaUrl, source: mediaUrl, mode: 'direct', sniffed: sniffed.slice(0, 6) };
+    }
+    if (directOk && adblock) {
+      // 直连画质更好，但清单要清广告 → 只代理清单，分片仍直连
+      return { type, url: proxyPath(mediaUrl), source: mediaUrl, mode: 'manifest', sniffed: sniffed.slice(0, 6) };
+    }
+    return { type, url: proxyPath(mediaUrl), source: mediaUrl, mode: 'proxy', sniffed: sniffed.slice(0, 6) };
   } catch (err) {
     return reply.code(502).send({ error: String(err).slice(0, 200) });
   }
@@ -165,7 +191,12 @@ app.get('/api/proxy', async (req, reply) => {
   const target = String((req.query as any)?.u ?? '');
   if (!/^https?:\/\//.test(target)) return reply.code(400).send({ error: '非法地址' });
   try {
-    const result = await proxyFetch(target, req.headers.range as string | undefined);
+    const adblock = (req.query as any)?.adblock !== '0';
+    const result = await proxyFetch(target, req.headers.range as string | undefined, { adblock });
+    if (result.adReport && result.adReport.removedSegments > 0) {
+      reply.header('x-deepmv-ads-removed', String(result.adReport.removedSegments));
+      reply.header('x-deepmv-ads-seconds', String(Math.round(result.adReport.removedSeconds)));
+    }
     for (const [key, value] of Object.entries(result.headers)) reply.header(key, value);
     if (result.isManifest) return reply.code(200).send(result.body);
     return reply.code(result.status).send(toNodeStream(result.body as ReadableStream<Uint8Array>));
@@ -193,6 +224,20 @@ app.post('/api/share/rules', async (req, reply) => {
   if (!result.ok) return reply.code(400).send({ error: result.error });
   reloadRules();
   return result;
+});
+
+/** 海报缓存：首访回源，之后走本地磁盘 */
+app.get('/api/img', async (req, reply) => {
+  const target = String((req.query as any)?.u ?? '');
+  if (!/^https?:\/\//.test(target)) return reply.code(400).send({ error: '非法地址' });
+  const img = await getImage(target);
+  if (!img) return reply.code(404).send({ error: '取图失败' });
+  return reply
+    .header('content-type', img.contentType)
+    .header('access-control-allow-origin', '*')
+    .header('cache-control', 'public, max-age=604800, immutable')
+    .header('x-deepmv-cache', img.hit ? 'HIT' : 'MISS')
+    .send(img.bytes);
 });
 
 const webDist = path.resolve(here, '../../web/dist');

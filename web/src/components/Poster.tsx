@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { SearchItem } from '../api';
+import { SearchItem, imgUrl } from '../api';
 
 export function PosterCard({ item, showSource = true }: { item: SearchItem; showSource?: boolean }) {
   const to = '/detail/' + item.source + '/' + encodeURIComponent(item.id);
@@ -8,7 +8,7 @@ export function PosterCard({ item, showSource = true }: { item: SearchItem; show
     <Link className="card" to={to}>
       <div className="card-poster">
         {item.pic
-          ? <img src={item.pic} alt={item.title} loading="lazy" referrerPolicy="no-referrer"
+          ? <img src={imgUrl(item.pic)} alt={item.title} loading="lazy" decoding="async"
               onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
           : <div className="card-fallback">{item.title.slice(0, 6)}</div>}
         {item.quality.height > 0 && item.quality.label !== '未知' && <span className="badge">{item.quality.label}</span>}

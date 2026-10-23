@@ -138,6 +138,8 @@ export async function detail(rule: Rule, id: string): Promise<DetailResult | nul
   const { list } = await request(rule, { ac: 'detail', ids: id });
   const raw = list[0];
   if (!raw) return null;
+  // 直接以 id 打开详情时也要过一遍成人分区过滤（搜索结果那条路径已经过滤过）
+  if (isAdult(raw)) return null;
   const item = toItem(rule, raw);
   const result: DetailResult = {
     source: rule.id,

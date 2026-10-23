@@ -3,6 +3,7 @@ import { type SearchItem } from './types.js';
 import { getRule } from './rules.js';
 import { getAdapter } from './adapters/index.js';
 import { probeHls, heightLabel } from './probe.js';
+import { canPlayDirect } from './proxy.js';
 import { type Road, type Episode } from './types.js';
 
 export interface PlayCandidate {
@@ -17,6 +18,8 @@ export interface PlayCandidate {
   width: number;
   label: string;
   ok: boolean;
+  /** 该片源 CDN 是否支持浏览器直连（true = 不经服务端中转，更快） */
+  cors?: boolean;
 }
 
 function normalize(s: string) {
@@ -49,6 +52,7 @@ async function candidatesFor(item: SearchItem, maxRoads = 2): Promise<PlayCandid
         height: probed.height, width: probed.width,
         label: probed.ok ? probed.label : '不可用',
         ok: probed.ok,
+        cors: getRule(item.source)?.cors === true,
       });
     }
     return out;
@@ -74,9 +78,16 @@ export async function bestPlay(query: string, opts: { excludeSource?: string; li
     .filter((i) => i.source !== opts.excludeSource && !(opts.exclude || []).includes(i.source + ':' + i.id))
     .slice(0, opts.limit ?? 8);
 
-  const groups = await Promise.all(pool.map((item) => candidatesFor(item, 2)));
+  // 优先探测「已知 CDN 支持浏览器直连」的源，它们能省掉服务端中转
+  const ordered = [...pool].sort((a, b) => {
+    const ca = getRule(a.source)?.cors ? 1 : 0;
+    const cb = getRule(b.source)?.cors ? 1 : 0;
+    return cb - ca;
+  });
+
+  const groups = await Promise.all(ordered.map((item) => candidatesFor(item, 2)));
   const all = groups.flat();
-  const playable = all.filter((c) => c.ok).sort((a, b) => b.height - a.height);
+  const playable = all.filter((c) => c.ok).sort((a, b) => b.height - a.height || (b.cors ? 1 : 0) - (a.cors ? 1 : 0));
   return {
     query,
     best: playable[0] ?? null,

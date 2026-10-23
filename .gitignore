@@ -2,15 +2,21 @@ node_modules/
 dist/
 web/dist/
 server/dist/
+server/data/
+server/share/
+
+# 抓包时产生的临时脚本与截图
 _*.mjs
 _shots/
 *.log
 *.tsbuildinfo
-.DS_Store
+
+# 本地环境与密钥，绝不提交
 .env
 .env.local
 *.jks
 *.keystore
 mobile/android/local.properties
 mobile/android/gradlew*
-server/share/
+
+.DS_Store

@@ -2,14 +2,15 @@
   {
     "id": "modu",
     "name": "魔都资源",
-    "version": "1.3",
+    "version": "1.4",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://caiji.moduapi.cc",
     "adapter": "maccms",
     "enabled": true,
     "bestQuality": "1080P",
-    "note": "直链 m3u8，欧美剧/国产剧分区完整",
+    "cors": true,
+    "note": "直连 CORS 通，实测 1080P；欧美剧/国产剧分区完整",
     "categoryMap": {
       "westernMovie": [
         "10",
@@ -61,14 +62,15 @@
   {
     "id": "rycz",
     "name": "日月采集",
-    "version": "1.4",
+    "version": "1.5",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://cj.rycjapi.com",
     "adapter": "maccms",
     "enabled": true,
     "bestQuality": "1080P",
-    "note": "多线路聚合，1080 直链稳定",
+    "cors": true,
+    "note": "直连 CORS 通；多线路聚合，1080 直链稳定",
     "categoryMap": {
       "westernMovie": [
         "6",
@@ -107,16 +109,111 @@
     }
   },
   {
+    "id": "guangsu",
+    "name": "光速资源",
+    "version": "1.2",
+    "author": "deepmv",
+    "type": "movie",
+    "baseUrl": "https://api.guangsuapi.com",
+    "adapter": "maccms",
+    "enabled": true,
+    "bestQuality": "1080P",
+    "cors": true,
+    "note": "直连 CORS 通，新片更新快",
+    "categoryMap": {
+      "westernMovie": [
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "westernTv": [
+        "16",
+        "23"
+      ],
+      "cnMovie": [
+        "6",
+        "7",
+        "8",
+        "11",
+        "12"
+      ],
+      "cnTv": [
+        "13",
+        "14",
+        "21"
+      ],
+      "anime": [
+        "4"
+      ],
+      "fourK": [],
+      "doc": [
+        "20"
+      ],
+      "shaw": []
+    }
+  },
+  {
+    "id": "zuid",
+    "name": "最大资源",
+    "version": "1.3",
+    "author": "deepmv",
+    "type": "movie",
+    "baseUrl": "https://api.zuidapi.com",
+    "adapter": "maccms",
+    "enabled": true,
+    "bestQuality": "1080P",
+    "note": "片库大；部分 CDN 有地区限制，走服务端中转",
+    "categoryMap": {
+      "westernMovie": [
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "westernTv": [
+        "16",
+        "23"
+      ],
+      "cnMovie": [
+        "6",
+        "7",
+        "8",
+        "11",
+        "12"
+      ],
+      "cnTv": [
+        "13",
+        "14",
+        "21"
+      ],
+      "anime": [
+        "4"
+      ],
+      "fourK": [],
+      "doc": [
+        "20"
+      ],
+      "shaw": []
+    }
+  },
+  {
     "id": "ffzy",
     "name": "非凡资源",
-    "version": "1.5",
+    "version": "1.6",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://cj.ffzyapi.com",
     "adapter": "maccms",
     "enabled": true,
     "bestQuality": "1080P",
-    "note": "更新快，分享页线路自动过滤",
+    "note": "更新快；分享页线路已过滤，CDN 可能限地区",
     "categoryMap": {
       "westernMovie": [
         "6",
@@ -156,14 +253,14 @@
   {
     "id": "bdzy",
     "name": "百度资源",
-    "version": "1.7",
+    "version": "1.8",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://api.apibdzy.com",
     "adapter": "maccms",
     "enabled": true,
     "bestQuality": "4K",
-    "note": "4K 电影专区 + 邵氏片库，画质上限最高",
+    "note": "含 4K 电影专区与邵氏片库，画质上限最高",
     "categoryMap": {
       "westernMovie": [
         "6",
@@ -206,7 +303,7 @@
   {
     "id": "wujin",
     "name": "无尽资源",
-    "version": "2.2",
+    "version": "2.3",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://api.wujinapi.me",
@@ -256,7 +353,7 @@
   {
     "id": "lzi",
     "name": "量子资源",
-    "version": "1.6",
+    "version": "1.7",
     "author": "deepmv",
     "type": "movie",
     "baseUrl": "https://cj.lziapi.com",

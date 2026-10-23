@@ -30,6 +30,7 @@ function template(raw: any, defaults: any = {}): Rule {
     enabled: raw.enabled !== false,
     bestQuality: raw.bestQuality ?? '1080P',
     note: raw.note ?? '',
+    cors: raw.cors === true,
     categoryMap: raw.categoryMap ?? {},
   };
   return { ...defaults, ...return_only_defined(base) } as Rule;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, Section, SearchItem } from '../api';
+import { api, imgUrl, Section, SearchItem } from '../api';
 import { PosterRow, PosterCard } from '../components/Poster';
 
 const TABS: { key: string; label: string }[] = [
@@ -55,7 +55,7 @@ export default function Home() {
     <main className="page">
       {hero && (
         <section className="hero">
-          <div className="hero-bg" style={{ backgroundImage: 'url(' + hero.pic + ')' }} />
+          <div className="hero-bg" style={{ backgroundImage: 'url(' + imgUrl(hero.pic) + ')' }} />
           <div className="hero-mask" />
           <div className="hero-body">
             <div className="hero-kicker">DeepMV 今日精选</div>

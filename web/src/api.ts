@@ -1,3 +1,9 @@
+/** 海报统一走服务端缓存：首次回源，之后本地磁盘（<5ms） */
+export function imgUrl(src?: string): string {
+  if (!src) return '';
+  return '/api/img?u=' + encodeURIComponent(src);
+}
+
 export interface Quality { height: number; label: string; }
 export interface AltSource { source: string; sourceName: string; id: string; quality: Quality; }
 export interface SearchItem {
@@ -46,7 +52,12 @@ export const api = {
   sources: () => get<{ sources: any[] }>('/api/sources'),
   collections: () => get<{ collections: any[] }>('/api/collections'),
   collection: (id: string, limit = 24) => get<any>('/api/collections/' + id + '?limit=' + limit),
-  resolve: (url: string) => get<{ type: string; url: string; source?: string; sniffed?: any[] }>('/api/resolve?url=' + encodeURIComponent(url)),
+  resolve: (url: string, opts: { adblock?: boolean; proxy?: boolean } = {}) =>
+    get<{ type: string; url: string; source?: string; mode?: 'direct' | 'manifest' | 'proxy' | 'none'; sniffed?: any[] }>(
+      '/api/resolve?url=' + encodeURIComponent(url)
+      + (opts.adblock === false ? '&adblock=0' : '')
+      + (opts.proxy ? '&proxy=1' : ''),
+    ),
   probe: (url: string) => get<any>('/api/probe?url=' + encodeURIComponent(url)),
 };
 

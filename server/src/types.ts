@@ -33,6 +33,8 @@ export interface Rule {
   enabled?: boolean;
   bestQuality?: string;
   note?: string;
+  /** 该源 CDN 是否给 CORS 头（浏览器可直连播放，跳过服务端中转） */
+  cors?: boolean;
   categoryMap?: CategoryMap;
 }
 

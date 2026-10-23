@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api, DetailResult, PlayCandidate, pushHistory, toggleFavorite, isFavorite } from '../api';
+import { api, imgUrl, DetailResult, PlayCandidate, pushHistory, toggleFavorite, isFavorite } from '../api';
 
 export default function Detail() {
   const { source = '', id = '' } = useParams();
@@ -33,6 +33,8 @@ export default function Detail() {
   }, [source, id]);
 
   const [switching, setSwitching] = useState('');
+  const [upgrade, setUpgrade] = useState<PlayCandidate | null>(null);
+  const [hereLabel, setHereLabel] = useState('');
 
   const autoProbe = (s: string, i: string) => {
     setProbing(true);
@@ -42,7 +44,10 @@ export default function Detail() {
         for (const r of res.roads) map[r.road] = r;
         setProbeMap(map);
         const anyOk = res.roads.some((r) => r.ok);
-        // 整条源都播不了：自动切到其它源能播的最高画质
+        const hereHeight = Math.max(0, ...res.roads.filter((r) => r.ok).map((r) => r.height));
+        setHereLabel(hereHeight > 0 ? labelOf(hereHeight, '') : '未知画质');
+
+        // 情况一：整条源都播不了 → 自动切到其它源
         if (!anyOk && !params.get('fixed')) {
           setSwitching('当前来源线路不可用，正在全源查找可用线路…');
           try {
@@ -53,6 +58,17 @@ export default function Detail() {
             }
           } catch { /* ignore */ }
           setSwitching('');
+          return;
+        }
+
+        // 情况二：能播但画质偏低（<1080P）→ 全源找更高画质，摆一个一键切换的提示
+        if (hereHeight > 0 && hereHeight < 1080 && !params.get('fixed')) {
+          try {
+            const alt = await api.best(res.roads[0]?.title || '', [s + ':' + i]);
+            if (alt.best && alt.best.height > hereHeight && alt.best.height >= 1080) {
+              setUpgrade(alt.best);
+            }
+          } catch { /* ignore */ }
         }
       })
       .catch(() => undefined)
@@ -110,10 +126,10 @@ export default function Detail() {
   return (
     <main className="page">
       <section className="detail-hero">
-        {detail.pic && <div className="detail-bg" style={{ backgroundImage: 'url(' + detail.pic + ')' }} />}
+        {detail.pic && <div className="detail-bg" style={{ backgroundImage: 'url(' + imgUrl(detail.pic) + ')' }} />}
         <div className="detail-inner">
           <div className="detail-poster">
-            {detail.pic ? <img src={detail.pic} alt={detail.title} referrerPolicy="no-referrer" /> : <div className="card-fallback">{detail.title.slice(0, 6)}</div>}
+            {detail.pic ? <img src={imgUrl(detail.pic)} alt={detail.title} /> : <div className="card-fallback">{detail.title.slice(0, 6)}</div>}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 className="detail-title">{detail.title}</h1>
@@ -148,6 +164,16 @@ export default function Detail() {
               }}>{fav ? '已收藏' : '收藏'}</button>
             </div>
             {switching && <div className="muted" style={{ marginTop: 12, color: 'var(--gold)' }}>{switching}</div>}
+            {upgrade && (
+              <div className="upgrade-banner">
+                <span>
+                  这个来源只有 <b>{hereLabel}</b>，<b>{upgrade.sourceName}</b> 实测有 <b>{upgrade.label} {upgrade.width}×{upgrade.height}</b>
+                </span>
+                <button className="btn primary" onClick={() => navigate('/detail/' + upgrade.source + '/' + encodeURIComponent(upgrade.id) + '?fixed=1')}>
+                  切到高画质
+                </button>
+              </div>
+            )}
             {smart && <div className="muted" style={{ marginTop: 12 }}>
               全源比对结果：{smart.sourceName} · {smart.label} {smart.width}x{smart.height} · {smart.road}
             </div>}

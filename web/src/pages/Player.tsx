@@ -1,35 +1,48 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Hls from 'hls.js';
-import { api, DetailResult, PlayCandidate, pushHistory } from '../api';
+import { api, DetailResult, pushHistory } from '../api';
 import { Upscaler } from '../upscale';
 
+/**
+ * 播放器。
+ *
+ * 卡顿的根因是每帧都 setState：timeupdate 每秒触发 4 次，每次都重渲染整个组件树
+ * （包括几百个选集按钮）。这里改成 ref + 直接写 DOM，只在「播放状态、切集、错误」
+ * 这类真正需要重绘的时刻才 setState。
+ */
 export default function Player() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const source = params.get('s') || '';
   const id = params.get('i') || '';
   const titleHint = params.get('t') || '';
+
+  const [detail, setDetail] = useState<DetailResult | null>(null);
   const [roadIndex, setRoadIndex] = useState(Number(params.get('r') || 0));
   const [epIndex, setEpIndex] = useState(Number(params.get('e') || 0));
-  const [detail, setDetail] = useState<DetailResult | null>(null);
-  const [status, setStatus] = useState('正在解析视频地址…');
   const [resolved, setResolved] = useState('');
+  const [status, setStatus] = useState('正在解析视频地址…');
   const [probeInfo, setProbeInfo] = useState('');
-  const [barVisible, setBarVisible] = useState(true);
-  const [speed, setSpeed] = useState(1);
   const [playing, setPlaying] = useState(false);
-  const [current, setCurrent] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [tried, setTried] = useState<string[]>([]);
-  const [failed, setFailed] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [sr, setSr] = useState(0);
+  const [srError, setSrError] = useState('');
+  const [adNotice, setAdNotice] = useState('');
+  const [barVisible, setBarVisible] = useState(true);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const upscalerRef = useRef<Upscaler | null>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
   const hideTimer = useRef<number>();
-  const [sr, setSr] = useState(0);           // 0=关 1=标准 2=强
-  const [srError, setSrError] = useState('');
+  const rafRef = useRef<number>();
+  const durationRef = useRef(0);
+  const failedRef = useRef(false);
+  const triedRef = useRef<string[]>([]);
 
+  /* ---------- 详情 ---------- */
   useEffect(() => {
     if (!source || !id) return;
     api.detail(source, id).then(setDetail).catch(() => setStatus('无法加载详情'));
@@ -38,19 +51,22 @@ export default function Player() {
   const road = detail?.roads[roadIndex];
   const episode = road?.episodes[epIndex];
 
-  useEffect(() => { setTried([]); setFailed(false); }, [episode?.url]);
+  useEffect(() => { failedRef.current = false; }, [episode?.url]);
 
+  /* ---------- 解析地址 ---------- */
   useEffect(() => {
     if (!episode) return;
     let alive = true;
     setStatus('正在解析视频地址…');
     setResolved('');
     setProbeInfo('');
+    setAdNotice('');
     api.resolve(episode.url)
       .then((res) => {
         if (!alive) return;
         setResolved(res.url);
         setStatus('');
+        if (res.mode === 'manifest' || res.mode === 'proxy') setAdNotice('已开启广告过滤');
         api.probe(res.source || episode.url)
           .then((probe) => { if (alive && probe.ok) setProbeInfo(probe.label + ' · ' + probe.width + 'x' + probe.height); })
           .catch(() => undefined);
@@ -59,6 +75,7 @@ export default function Player() {
     return () => { alive = false; };
   }, [episode?.url]);
 
+  /* ---------- HLS 装载 ---------- */
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !resolved) return;
@@ -66,24 +83,91 @@ export default function Player() {
     video.pause();
     video.removeAttribute('src');
     video.load();
+
     const isHls = /\.m3u8/i.test(resolved) || resolved.includes('/api/proxy');
     if (isHls && Hls.isSupported()) {
-      hls = new Hls({ enableWorker: true, maxBufferLength: 40, backBufferLength: 90 });
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 90,
+        backBufferLength: 30,
+        // 广告已被服务端清掉，播放器不需要再等 discontinuity
+        maxBufferHole: 0.5,
+      });
       hls.loadSource(resolved);
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) { setStatus('线路异常，正在尝试其它来源…'); tryNextSource(); }
+        if (data.fatal && !failedRef.current) {
+          setStatus('线路异常，正在尝试其它来源…');
+          void tryNextSource();
+        }
       });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl') && isHls) {
+      video.src = resolved;
     } else {
       video.src = resolved;
     }
-    const onReady = () => { setStatus(''); setFailed(false); void video.play().catch(() => setStatus('点击画面开始播放')); };
+
+    const onReady = () => {
+      setStatus('');
+      failedRef.current = false;
+      void video.play().catch(() => setStatus('点击画面开始播放'));
+    };
+    const onErr = () => { if (!failedRef.current) { setStatus('线路不可用，尝试其它来源…'); void tryNextSource(); } };
     video.addEventListener('loadedmetadata', onReady);
-    video.addEventListener('error', () => { setStatus('线路不可用，尝试其它来源…'); tryNextSource(); });
-    return () => { hls?.destroy(); video.removeEventListener('loadedmetadata', onReady); };
+    video.addEventListener('error', onErr);
+    return () => {
+      hls?.destroy();
+      video.removeEventListener('loadedmetadata', onReady);
+      video.removeEventListener('error', onErr);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolved]);
 
-  // 超分渲染：开启时把 video 隐藏、由 WebGL 画布输出
+  /* ---------- 进度条：用 rAF 直写 DOM，不再走 React ---------- */
+  useEffect(() => {
+    const tick = () => {
+      const v = videoRef.current;
+      if (v && fillRef.current && timeRef.current) {
+        const d = durationRef.current || v.duration || 0;
+        if (v.currentTime && d) {
+          fillRef.current.style.width = ((v.currentTime / d) * 100).toFixed(2) + '%';
+        }
+        timeRef.current.textContent = fmt(v.currentTime) + ' / ' + fmt(d);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, []);
+
+  /* ---------- 自动隐藏控制栏 ---------- */
+  const showBar = useCallback(() => {
+    setBarVisible((prev) => (prev ? prev : true));
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setBarVisible(false), 3400);
+  }, []);
+
+  const tryNextSource = useCallback(async () => {
+    if (failedRef.current || !detail) return;
+    failedRef.current = true;
+    const key = detail.source + ':' + detail.id;
+    try {
+      const res = await api.best(detail.title, [...triedRef.current, key]);
+      if (res.best) {
+        triedRef.current = [...triedRef.current, key];
+        navigate('/play?' + new URLSearchParams({
+          s: res.best.source, i: res.best.id, r: '0', e: '0', t: res.best.title, sn: res.best.sourceName,
+        }).toString());
+      } else {
+        setStatus('所有来源均不可用');
+        failedRef.current = false;
+      }
+    } catch { setStatus('线路不可用'); failedRef.current = false; }
+  }, [detail, navigate]);
+
+  /* ---------- 超分 ---------- */
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -105,29 +189,11 @@ export default function Player() {
       setSrError('超分不可用：' + String((err as Error).message || err));
       setSr(0);
     }
-    return () => { /* 保持实例，切换集不重建 */ };
   }, [sr]);
 
   useEffect(() => () => { upscalerRef.current?.stop(); }, []);
 
-  const tryNextSource = useCallback(async () => {
-    if (failed || !detail) return;
-    setFailed(true);
-    const key = (detail.source + ':' + detail.id);
-    try {
-      const res = await api.best(detail.title, [...tried, key]);
-      if (res.best) {
-        setTried((t) => [...t, key]);
-        navigate('/play?' + new URLSearchParams({
-          s: res.best.source, i: res.best.id, r: '0', e: '0', t: res.best.title, sn: res.best.sourceName,
-        }).toString() + '&auto=1');
-        setFailed(false);
-      } else {
-        setStatus('所有来源均不可用');
-      }
-    } catch { setStatus('线路不可用'); }
-  }, [detail, failed, tried, navigate]);
-
+  /* ---------- 记录历史 ---------- */
   useEffect(() => {
     if (episode && detail) {
       pushHistory({
@@ -137,7 +203,7 @@ export default function Player() {
       });
       document.title = detail.title + ' · ' + episode.name + ' · DeepMV';
     }
-  }, [episode?.url, probeInfo]);
+  }, [episode?.url, probeInfo, detail, road?.name, episode?.name]);
 
   const next = useCallback(() => {
     if (!road) return;
@@ -156,12 +222,6 @@ export default function Player() {
     else void document.exitFullscreen();
   };
 
-  const showBar = () => {
-    setBarVisible(true);
-    window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => setBarVisible(false), 3400);
-  };
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const v = videoRef.current;
@@ -174,9 +234,7 @@ export default function Player() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [next]);
-
-  const pct = duration > 0 ? (current / duration) * 100 : 0;
+  }, [next, showBar]);
 
   return (
     <div className="player-page">
@@ -186,6 +244,7 @@ export default function Player() {
           <span style={{ fontWeight: 700 }}>{detail?.title || titleHint}</span>
           {episode && <span className="muted">{road?.name} · {episode.name}</span>}
           {probeInfo && <span style={{ color: 'var(--gold)' }}>{probeInfo}</span>}
+          {adNotice && <span className="ad-chip">{adNotice}</span>}
         </div>
         <div className="player-video-wrap">
           <canvas ref={canvasRef} className="sr-canvas" style={{ display: 'none' }} />
@@ -195,26 +254,25 @@ export default function Player() {
             onClick={() => { const v = videoRef.current; if (!v) return; v.paused ? void v.play() : v.pause(); }}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-            onTimeUpdate={(e) => { setCurrent((e.target as HTMLVideoElement).currentTime); showBar(); }}
-            onLoadedMetadata={(e) => setDuration((e.target as HTMLVideoElement).duration)}
+            onLoadedMetadata={(e) => { durationRef.current = (e.target as HTMLVideoElement).duration; }}
             onEnded={next}
           />
           {status && <div className="toast" style={{ position: 'absolute', top: '44%' }}>{status}</div>}
         </div>
         <div className={'player-bar' + (barVisible ? '' : ' hide')}>
-          <button className="pb-btn" onClick={() => navigate(-1)} title="返回">{'\u2190'}</button>
-          <button className="pb-btn" onClick={() => { const v = videoRef.current; if (v) v.currentTime -= 10; }} title="后退 10 秒">{'\u21E4'}</button>
+          <button className="pb-btn" onClick={() => navigate(-1)} title="返回">←</button>
+          <button className="pb-btn" onClick={() => { const v = videoRef.current; if (v) v.currentTime -= 10; }} title="后退 10 秒">⇤</button>
           <button className="pb-btn" onClick={() => { const v = videoRef.current; if (!v) return; v.paused ? void v.play() : v.pause(); }}>
-            {playing ? '\u23F8' : '\u25B6'}
+            {playing ? '⏸' : '▶'}
           </button>
-          <button className="pb-btn" onClick={() => { const v = videoRef.current; if (v) v.currentTime += 10; }} title="前进 10 秒">{'\u21E5'}</button>
-          <span className="pb-time">{fmt(current)} / {fmt(duration)}</span>
+          <button className="pb-btn" onClick={() => { const v = videoRef.current; if (v) v.currentTime += 10; }} title="前进 10 秒">⇥</button>
+          <span className="pb-time" ref={timeRef}>00:00 / 00:00</span>
           <div className="pb-progress" onClick={(e) => {
             const v = videoRef.current;
             const rect = e.currentTarget.getBoundingClientRect();
             if (v && v.duration) v.currentTime = ((e.clientX - rect.left) / rect.width) * v.duration;
           }}>
-            <div className="pb-fill" style={{ width: pct + '%' }} />
+            <div className="pb-fill" ref={fillRef} style={{ width: '0%' }} />
           </div>
           <button className="pb-select" onClick={() => setSr((v) => (v + 1) % 3)} title="本地超分">
             {'SR ' + (sr === 0 ? 'OFF' : sr === 1 ? 'STD' : 'MAX')}
@@ -222,8 +280,8 @@ export default function Player() {
           <select className="pb-select" value={speed} onChange={(e) => changeSpeed(Number(e.target.value))}>
             {[0.75, 1, 1.25, 1.5, 2].map((s) => <option key={s} value={s}>{s}x</option>)}
           </select>
-          <button className="pb-btn" onClick={next} title="下一集">{'\u23ED'}</button>
-          <button className="pb-btn" onClick={toggleFullscreen} title="全屏">{'\u26F6'}</button>
+          <button className="pb-btn" onClick={next} title="下一集">⏭</button>
+          <button className="pb-btn" onClick={toggleFullscreen} title="全屏">⛶</button>
         </div>
       </div>
       <aside className="player-side">
