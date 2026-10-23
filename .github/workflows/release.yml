@@ -194,7 +194,8 @@ jobs:
 
   # ---------- 7. 汇总发布 ----------
   release:
-    needs: [web, windows, linux, docker]
+    # 必须等 android 一起完成，否则下载产物时 APK 还没生成
+    needs: [web, windows, linux, docker, android]
     # 任一平台构建失败也不阻塞发布：已有的产物照样发出去
     if: always() && needs.web.result == 'success'
     runs-on: ubuntu-latest
