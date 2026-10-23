@@ -48,7 +48,19 @@ android {
     }
 }
 
+// 统一 Kotlin 标准库版本。
+// 不写这段会报 Duplicate class kotlin.collections.jdk8.CollectionsJDK8Kt：
+// AGP 会拖进 kotlin-stdlib-jdk7/jdk8:1.6.21，与 kotlin-stdlib:1.8.22 的类重复。
+configurations.all {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'org.jetbrains.kotlin') {
+            details.useVersion '1.9.24'
+        }
+    }
+}
+
 dependencies {
+    implementation platform('org.jetbrains.kotlin:kotlin-bom:1.9.24')
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.webkit:webkit:1.12.1'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
