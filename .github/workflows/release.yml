@@ -181,9 +181,9 @@ jobs:
       - name: 整理未签名包
         if: always()
         run: |
-          TAG=" + D + "{GITHUB_REF#refs/tags/}"
+          TAG=${GITHUB_REF#refs/tags/}
           APK=mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
-          if [ -f "$APK" ]; then cp "$APK" "deepmv-android-" + D + "{TAG}-unsigned.apk"; fi
+          if [ -f "$APK" ]; then cp "$APK" "deepmv-android-${TAG}-unsigned.apk"; fi
           ls -la deepmv-android-*.apk 2>/dev/null || echo "无 apk 产出"
       - uses: actions/upload-artifact@v4
         if: always()
