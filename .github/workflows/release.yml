@@ -147,16 +147,21 @@ jobs:
           gradle wrapper --gradle-version 8.7 || true
           ./gradlew assembleRelease --no-daemon \
             -PserverUrl="${{ vars.DEEPMV_SERVER_URL }}"
+      # GitHub 不允许在 if 里用 secrets 上下文，所以先落到 env 再判断
       - name: 签名
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        if: env.KEYSTORE_B64 != ''
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > /tmp/deepmv.jks
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/deepmv.jks
           TAG=${GITHUB_REF#refs/tags/}
           APK=mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
           $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign \
             --ks /tmp/deepmv.jks \
-            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
-            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
             --out deepmv-android-${TAG}.apk "$APK"
           rm -f /tmp/deepmv.jks
       - uses: actions/upload-artifact@v4
