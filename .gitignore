@@ -17,6 +17,5 @@ _shots/
 *.jks
 *.keystore
 mobile/android/local.properties
-mobile/android/gradlew*
 
 .DS_Store

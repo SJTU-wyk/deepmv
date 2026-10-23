@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+web/dist
+server/dist
+server/data
+server/share
+_shots
+_*.mjs
+.git
+*.log
+**/*.tsbuildinfo
