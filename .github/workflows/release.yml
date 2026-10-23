@@ -177,7 +177,16 @@ jobs:
             --ks-pass "pass:$KEYSTORE_PASSWORD" \
             --out deepmv-android-${TAG}.apk "$APK"
           rm -f /tmp/deepmv.jks
+      # 没配 keystore 时也要产出：给出未签名包，使用者可自行签名
+      - name: 整理未签名包
+        if: always()
+        run: |
+          TAG=" + D + "{GITHUB_REF#refs/tags/}"
+          APK=mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ -f "$APK" ]; then cp "$APK" "deepmv-android-" + D + "{TAG}-unsigned.apk"; fi
+          ls -la deepmv-android-*.apk 2>/dev/null || echo "无 apk 产出"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: android
           path: deepmv-android-*.apk
@@ -197,8 +206,10 @@ jobs:
         run: find artifacts -type f | head -20
       - uses: softprops/action-gh-release@v2
         with:
+          # 用 glob 而不是固定路径：某个平台没产出时不会整体失败
           files: |
-            artifacts/web-dist/*.tar.gz
-            artifacts/windows/*.zip
-            artifacts/linux/*.tar.gz
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.apk
           generate_release_notes: true
+          fail_on_unmatched_files: false
