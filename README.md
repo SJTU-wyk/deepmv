@@ -12,6 +12,9 @@
 
 Ubuntu 22.04 / 24.04 或 Debian 12，一行命令：
 
+> 用微软云的话看 [deploy/AZURE.md](deploy/AZURE.md)，从建虚拟机到 24 小时保活都有步骤，包括哪里确认自动关闭有没有关掉。
+
+
 ```bash
 git clone https://github.com/SJTU-wyk/deepmv.git
 cd deepmv

@@ -432,9 +432,9 @@
     "type": "movie",
     "baseURL": "https://www.libvio.com",
     "adapter": "xpath",
-    "enabled": false,
+    "enabled": true,
     "bestQuality": "1080P",
-    "note": "Cloudflare 防护 + 地区限制，海外 IP 打不开；中国大陆可用。默认关闭，确认可达后再启用",
+    "note": "Cloudflare 防护 + 地区限制，海外 IP 打不开；中国大陆可用。（已启用；若本地网络不通会显示超时，不影响其它源）",
     "searchURL": "https://www.libvio.com/search/@keyword----------.html",
     "searchList": "//div[contains(@class,\"stui-vodlist__box\")]",
     "searchName": ".//a/@title",
@@ -451,9 +451,9 @@
     "type": "movie",
     "baseURL": "https://www.hdmoli.pro",
     "adapter": "maccms",
-    "enabled": false,
+    "enabled": true,
     "bestQuality": "1080P",
-    "note": "海外 IP 被地区限制，中国大陆可用。确认可达后再启用",
+    "note": "海外 IP 被地区限制，中国大陆可用（已启用；若本地网络不通会显示超时，不影响其它源）",
     "categoryMap": {
       "westernMovie": [
         "6",
@@ -488,9 +488,9 @@
     "type": "movie",
     "baseURL": "https://www.cupfox.com",
     "adapter": "maccms",
-    "enabled": false,
+    "enabled": true,
     "bestQuality": "1080P",
-    "note": "海外 IP 不通，中国大陆可用。确认可达后再启用",
+    "note": "海外 IP 不通，中国大陆可用（已启用；若本地网络不通会显示超时，不影响其它源）",
     "categoryMap": {
       "westernMovie": [
         "6",

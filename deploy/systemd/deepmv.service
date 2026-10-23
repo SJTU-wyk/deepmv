@@ -9,22 +9,30 @@ User=deepmv
 Group=deepmv
 WorkingDirectory=/opt/deepmv/server
 Environment=NODE_ENV=production
-Environment=DEEPMV_MODE=public
-Environment=DEEPMV_RATE=90
-Environment=ALLOW_PROXY=0
-# 口令写在这里，chmod 600。不写就是公开访问
 EnvironmentFile=-/etc/deepmv.env
-ExecStart=/usr/bin/node --experimental-strip-types src/index.ts
+ExecStart=/usr/bin/node dist/index.js
+
+# ---- 24 小时运行 ----
 Restart=always
 RestartSec=5
+# 5 分钟内重启超过 10 次就停手，避免崩溃循环把 CPU 打满
+StartLimitIntervalSec=300
+StartLimitBurst=10
+TimeoutStopSec=20
 
-# 沙箱：服务被拿下也翻不出这个目录
+# ---- 沙箱：服务被拿下也翻不出这个目录 ----
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/deepmv/server/share
-MemoryMax=700M
+ReadWritePaths=/opt/deepmv/server/share /opt/deepmv/server/data
+# 免费档机器普遍 1GB 内存，留余量给系统和 Caddy
+MemoryMax=800M
+CPUWeight=50
+
+# ---- 日志限流，防止 journal 把磁盘写满 ----
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
 
 [Install]
 WantedBy=multi-user.target

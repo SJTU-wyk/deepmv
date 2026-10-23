@@ -134,6 +134,37 @@ if ! systemctl is-active --quiet deepmv; then
 fi
 log "后端已启动，监听 127.0.0.1:$PORT"
 
+# ---------- 6b. 保活：看门狗 + 日志限额 ----------
+log "配置健康检查看门狗"
+chmod +x "$INSTALL_DIR/deploy/watchdog.sh" 2>/dev/null || true
+cp "$INSTALL_DIR/deploy/systemd/deepmv-watchdog.service" /etc/systemd/system/ 2>/dev/null || true
+cp "$INSTALL_DIR/deploy/systemd/deepmv-watchdog.timer" /etc/systemd/system/ 2>/dev/null || true
+# systemd 的 Restart=always 只管进程崩溃，卡死不重启；timer 每 5 分钟敲一次健康检查
+mkdir -p /etc/systemd/system
+cat > /etc/systemd/system/deepmv-watchdog.service <<EOF
+[Unit]
+Description=DeepMV 健康检查
+After=deepmv.service
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/deploy/watchdog.sh
+Environment=DEEPMV_PORT=$PORT
+EOF
+systemctl daemon-reload
+systemctl enable --now deepmv-watchdog.timer >/dev/null 2>&1
+log "看门狗已启用：每 5 分钟检查一次，连续 3 次失败自动重启"
+
+log "限制日志占用"
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/deepmv.conf <<EOF
+[Journal]
+SystemMaxUse=200M
+SystemKeepFree=500M
+MaxRetentionSec=1month
+EOF
+systemctl restart systemd-journald >/dev/null 2>&1 || true
+
 # ---------- 7. Caddy 反代 + HTTPS ----------
 log "配置 Caddy 反向代理"
 apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
@@ -195,6 +226,8 @@ ufw --force enable >/dev/null 2>&1 || true
 # ---------- 9. 自检 ----------
 log "自检"
 curl -sf "http://127.0.0.1:$PORT/api/health" && echo " ← 后端正常" || echo "后端无响应"
+systemctl is-enabled --quiet deepmv && echo "开机自启：已开启" || echo "开机自启：未开启"
+systemctl is-active --quiet deepmv-watchdog.timer && echo "看门狗：运行中" || echo "看门狗：未运行"
 
 IP=$(curl -sS -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 echo
@@ -214,7 +247,9 @@ echo "  访问口令： $ACCESS_KEY"
 echo "  （存在 /etc/deepmv.env，分享给朋友时一起给出）"
 echo
 echo "  常用命令："
-echo "    systemctl status deepmv     查看服务状态"
-echo "    journalctl -u deepmv -f     看实时日志"
-echo "    nano /etc/deepmv.env        改口令 / 限流，改完 systemctl restart deepmv"
+echo "    systemctl status deepmv            查看服务状态"
+echo "    journalctl -u deepmv -f            看实时日志"
+echo "    nano /etc/deepmv.env               改口令 / 限流，改完 systemctl restart deepmv"
+echo "    systemctl list-timers deepmv*      看门狗下次检查时间"
+echo "    df -h                              看磁盘（日志已限制在 200M）"
 echo "==============================================="

@@ -1,0 +1,7 @@
+[Unit]
+Description=DeepMV 健康检查
+After=deepmv.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deepmv/deploy/watchdog.sh
