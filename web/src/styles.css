@@ -201,6 +201,9 @@ input { font-family: inherit; }
   padding: 3px 9px; border-radius: 999px; font-size: 11px;
   background: rgba(70, 208, 122, 0.16); color: #46d07a; border: 1px solid rgba(70, 208, 122, 0.35);
 }
+.ad-chip.warn {
+  background: rgba(231, 180, 90, 0.16); color: var(--gold); border-color: rgba(231, 180, 90, 0.4);
+}
 .player-side { width: 320px; background: #0b0b11; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 .player-side-head { padding: 16px 18px; border-bottom: 1px solid var(--line); }
 .player-side-body { overflow-y: auto; padding: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }

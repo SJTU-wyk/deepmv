@@ -232,6 +232,23 @@ export default function Detail() {
         </section>
       )}
 
+      {detail.panLinks && detail.panLinks.length > 0 && (
+        <section className="section">
+          <div className="section-head">
+            <h2 className="section-title">网盘资源</h2>
+            <span className="section-sub">来自站点索引的分享链接，需要你自己的网盘账号才能打开</span>
+          </div>
+          <div className="road-tabs">
+            {detail.panLinks.map((pan, i) => (
+              <a key={pan.url + i} className="road-tab" href={pan.url} target="_blank" rel="noreferrer noopener">
+                <span className="rt-name">{panLabel(pan.type)}</span>
+                <span className="rt-info">{pan.quality || '未标注'}{pan.code ? ' · 提取码 ' + pan.code : ''}</span>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
+
       {(detail.actors || detail.director) && (
         <section className="section">
           <div className="panel">
@@ -242,6 +259,14 @@ export default function Detail() {
       )}
     </main>
   );
+}
+
+function panLabel(type: string): string {
+  const map: Record<string, string> = {
+    baidu: '百度网盘', quark: '夸克网盘', xunlei: '迅雷网盘',
+    pikpak: 'PikPak', aliyun: '阿里云盘', '115': '115 网盘', uc: 'UC 网盘',
+  };
+  return map[type] || type;
 }
 
 function labelOf(height: number, fallback: string): string {

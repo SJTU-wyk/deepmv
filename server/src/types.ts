@@ -21,7 +21,7 @@ export interface Rule {
   baseUrl: string;
   referer?: string;
   userAgent?: string;
-  adapter: 'maccms' | 'xpath' | 'archive';
+  adapter: 'maccms' | 'xpath' | 'archive' | 'ddys';
   searchURL?: string;
   searchList?: string;
   searchName?: string;
@@ -73,6 +73,8 @@ export interface DetailResult {
   actors?: string;
   director?: string;
   roads: Road[];
+  /** 网盘资源（百度 / 夸克 / 迅雷 / PikPak），只能展示不能直接播 */
+  panLinks?: { type: string; url: string; quality?: string; code?: string }[];
 }
 
 export const QUALITY_RANK = ['SD', '360P', '480P', '540P', '720P', '1080P', '2K', '4K', '8K'];

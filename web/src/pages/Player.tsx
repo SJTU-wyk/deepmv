@@ -29,6 +29,7 @@ export default function Player() {
   const [sr, setSr] = useState(0);
   const [srError, setSrError] = useState('');
   const [adNotice, setAdNotice] = useState('');
+  const [burnInRisk, setBurnInRisk] = useState(false);
   const [barVisible, setBarVisible] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -66,7 +67,10 @@ export default function Player() {
         if (!alive) return;
         setResolved(res.url);
         setStatus('');
-        if (res.mode === 'manifest' || res.mode === 'proxy') setAdNotice('已开启广告过滤');
+        if (res.mode === 'manifest' || res.mode === 'proxy') setAdNotice('已过滤清单广告');
+        // 已知几个采集源的片源把博彩广告烧进了画面，清单层删不掉，提醒换源
+        const risky = ['guangsu', 'ffzy', 'zuid', 'wujin', 'bdzy'];
+        setBurnInRisk(risky.includes(source));
         api.probe(res.source || episode.url)
           .then((probe) => { if (alive && probe.ok) setProbeInfo(probe.label + ' · ' + probe.width + 'x' + probe.height); })
           .catch(() => undefined);
@@ -181,7 +185,8 @@ export default function Player() {
     }
     try {
       if (!upscalerRef.current) upscalerRef.current = new Upscaler(canvas, video);
-      upscalerRef.current.start(sr === 2 ? 1.65 : 1.1);
+      upscalerRef.current.start(sr as 0 | 1 | 2);
+      upscalerRef.current.setLevel(sr as 0 | 1 | 2);
       canvas.style.display = 'block';
       video.style.opacity = '0';
       setSrError('');
@@ -245,6 +250,11 @@ export default function Player() {
           {episode && <span className="muted">{road?.name} · {episode.name}</span>}
           {probeInfo && <span style={{ color: 'var(--gold)' }}>{probeInfo}</span>}
           {adNotice && <span className="ad-chip">{adNotice}</span>}
+          {burnInRisk && (
+            <span className="ad-chip warn" title="片源把赌博广告烧进了视频画面，清单过滤删不掉，只能换源">
+              画面广告 · 建议换源
+            </span>
+          )}
         </div>
         <div className="player-video-wrap">
           <canvas ref={canvasRef} className="sr-canvas" style={{ display: 'none' }} />
@@ -275,7 +285,7 @@ export default function Player() {
             <div className="pb-fill" ref={fillRef} style={{ width: '0%' }} />
           </div>
           <button className="pb-select" onClick={() => setSr((v) => (v + 1) % 3)} title="本地超分">
-            {'SR ' + (sr === 0 ? 'OFF' : sr === 1 ? 'STD' : 'MAX')}
+            {'SR ' + (sr === 0 ? 'OFF' : sr === 1 ? '1.5x' : '2x')}
           </button>
           <select className="pb-select" value={speed} onChange={(e) => changeSpeed(Number(e.target.value))}>
             {[0.75, 1, 1.25, 1.5, 2].map((s) => <option key={s} value={s}>{s}x</option>)}
@@ -291,7 +301,7 @@ export default function Player() {
           <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[0, 1, 2].map((v) => (
               <button key={v} className={'chip' + (sr === v ? ' active' : '')} onClick={() => setSr(v)} style={{ fontSize: 11.5, padding: '5px 10px' }}>
-                {v === 0 ? '超分关' : v === 1 ? '超分标准' : '超分强力'}
+                {v === 0 ? '超分关' : v === 1 ? '超分 1.5x' : '超分 2x'}
               </button>
             ))}
           </div>

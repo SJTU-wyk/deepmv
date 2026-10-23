@@ -17,6 +17,7 @@ export interface DetailResult {
   source: string; sourceName: string; id: string; title: string;
   year?: string; area?: string; genre?: string; remarks?: string; pic?: string;
   intro?: string; actors?: string; director?: string; roads: Road[];
+  panLinks?: { type: string; url: string; quality?: string; code?: string }[];
 }
 export interface Section { key: string; title: string; subtitle: string; items: SearchItem[]; }
 export interface SourceStat { id: string; name: string; count: number; ms: number; error?: string; }

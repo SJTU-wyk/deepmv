@@ -410,5 +410,111 @@
     "note": "公有领域欧美经典，分辨率取母版不作伪标",
     "archiveQuery": "mediatype:(movies) AND collection:(feature_films)",
     "categoryMap": {}
+  },
+  {
+    "id": "ddys",
+    "name": "低端影视",
+    "version": "1.0",
+    "author": "deepmv",
+    "type": "movie",
+    "baseUrl": "https://ddys.io",
+    "adapter": "ddys",
+    "enabled": true,
+    "bestQuality": "1080P",
+    "note": "正经 JSON API；带网盘资源（百度/夸克/迅雷/PikPak），网盘只能展示不能直连播放",
+    "categoryMap": {}
+  },
+  {
+    "id": "libvio",
+    "name": "LIBVIO",
+    "version": "1.0",
+    "author": "deepmv",
+    "type": "movie",
+    "baseURL": "https://www.libvio.com",
+    "adapter": "xpath",
+    "enabled": false,
+    "bestQuality": "1080P",
+    "note": "Cloudflare 防护 + 地区限制，海外 IP 打不开；中国大陆可用。默认关闭，确认可达后再启用",
+    "searchURL": "https://www.libvio.com/search/@keyword----------.html",
+    "searchList": "//div[contains(@class,\"stui-vodlist__box\")]",
+    "searchName": ".//a/@title",
+    "searchResult": ".//a/@href",
+    "chapterRoads": "//div[contains(@class,\"stui-pannel__head\")]/following-sibling::ul[1]",
+    "chapterResult": ".//a/@href",
+    "categoryMap": {}
+  },
+  {
+    "id": "hdmoli",
+    "name": "HDMoli",
+    "version": "1.0",
+    "author": "deepmv",
+    "type": "movie",
+    "baseURL": "https://www.hdmoli.pro",
+    "adapter": "maccms",
+    "enabled": false,
+    "bestQuality": "1080P",
+    "note": "海外 IP 被地区限制，中国大陆可用。确认可达后再启用",
+    "categoryMap": {
+      "westernMovie": [
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "cnMovie": [
+        "6",
+        "7",
+        "8",
+        "11",
+        "12"
+      ],
+      "cnTv": [
+        "13",
+        "14"
+      ],
+      "westernTv": [
+        "16"
+      ]
+    }
+  },
+  {
+    "id": "cupfox",
+    "name": "茶杯狐",
+    "version": "1.0",
+    "author": "deepmv",
+    "type": "movie",
+    "baseURL": "https://www.cupfox.com",
+    "adapter": "maccms",
+    "enabled": false,
+    "bestQuality": "1080P",
+    "note": "海外 IP 不通，中国大陆可用。确认可达后再启用",
+    "categoryMap": {
+      "westernMovie": [
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "cnMovie": [
+        "6",
+        "7",
+        "8",
+        "11",
+        "12"
+      ],
+      "cnTv": [
+        "13",
+        "14"
+      ],
+      "westernTv": [
+        "16"
+      ]
+    }
   }
 ]

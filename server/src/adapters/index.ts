@@ -1,6 +1,7 @@
 import * as maccms from './maccms.js';
 import * as xpath from './xpath.js';
 import * as archive from './archive.js';
+import * as ddys from './ddys.js';
 import { type Rule, type SearchItem, type DetailResult } from '../types.js';
 
 export interface Adapter {
@@ -8,7 +9,7 @@ export interface Adapter {
   detail(rule: Rule, id: string): Promise<DetailResult | null>;
 }
 
-const adapters: Record<string, Adapter> = { maccms, xpath, archive };
+const adapters: Record<string, Adapter> = { maccms, xpath, archive, ddys };
 
 export function getAdapter(rule: Rule): Adapter {
   return adapters[rule.adapter] ?? maccms;
