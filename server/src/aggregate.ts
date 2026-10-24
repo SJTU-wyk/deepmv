@@ -59,8 +59,18 @@ export function mergeItems(items: SearchItem[]): MergedItem[] {
 
 export interface SourceStat { id: string; name: string; count: number; ms: number; error?: string; }
 
-/** 搜索结果缓存时长：上游不需要被同一批查询反复打 */
+/** 搜索成功结果的缓存时长 */
 const SEARCH_TTL = Number(process.env.DEEPMV_SEARCH_TTL || 3 * 60_000);
+
+/**
+ * 搜索失败结果的缓存时长（负缓存）。
+ *
+ * 不加这个的话，那 4 个海外不可达的源每次搜索都要重新等它们各自超时；
+ * 熔断要连续失败 3 次才开，前两次全靠用户等。
+ * 负缓存让「刚刚失败的源」在短时间内直接跳过，不再白等。
+ * 时长比正缓存短，给对方恢复的机会。
+ */
+const SEARCH_FAIL_TTL = Number(process.env.DEEPMV_SEARCH_FAIL_TTL || 90_000);
 
 /** 单次搜索的总时限：到点就返回已有的，不等慢源 */
 const SEARCH_DEADLINE_MS = Number(process.env.DEEPMV_SEARCH_DEADLINE || 6_000);
@@ -74,31 +84,63 @@ interface SearchOutcome {
   error?: string;
 }
 
+/** 缓存的失败标记，用独立前缀避免和成功的条目混淆 */
+interface FailureMark { error: string; at: number }
+
+function failKey(ruleId: string, keyword: string) {
+  return 'fail:' + ruleId + ':' + keyword;
+}
+
+function recentFailure(ruleId: string, keyword: string): string | null {
+  const mark = caches.upstream.get<FailureMark>(failKey(ruleId, keyword));
+  return mark ? mark.error : null;
+}
+
+function rememberFailure(ruleId: string, keyword: string, error: string, ttlMs = SEARCH_FAIL_TTL) {
+  caches.upstream.set(failKey(ruleId, keyword), { error, at: Date.now() } as FailureMark, ttlMs);
+}
+
+/** 超时用的负缓存更短：45 秒后允许重试，对方可能只是这一下慢 */
+const SEARCH_TIMEOUT_TTL = Number(process.env.DEEPMV_SEARCH_TIMEOUT_TTL || 45_000);
+
 /**
  * 逐源搜索。
  *
- * 四层保护，实测把冷搜索从 24 秒压到 8 秒以内：
+ * 流程：
+ *   1. 熔断中的源直接跳过（0 成本）
+ *   2. 刚失败过的源走负缓存，也不打上游
+ *   3. 其余并发打出去，按主机限流
+ *   4. 到总时限就返回已有的
  *
- *   1. 熔断：连续失败到阈值的源暂时摘掉。海外环境下有三个源必然超时，
- *      每次搜索都等它们白等十几秒。
- *   2. 排序：能用的、上次快的源排在前面，并发槽位优先给他们。
- *   3. 限量并发：同一时刻只打 UPSTREAM_CONCURRENCY 个上游。
- *   4. 总时限：到点就返回已经拿到的，不等剩下的。
- *      没回来的源在结果里标成「超时」，前端只是少显示几个来源，不报错。
- *
- * 单个源失败不影响其它源：每个任务自己吞掉异常，返回带 error 字段的结果。
+ * 单个源失败只影响它自己，其它源照常返回。
  */
 async function searchSources(keyword: string, rules: Rule[]): Promise<SearchOutcome[]> {
   const key = keyword.trim().toLowerCase();
-
-  // 摘掉熔断中的源
-  const candidates = sortByHealth(rules.filter((r) => available(r.id)));
-  const skipped = rules.filter((r) => !available(r.id));
-
   const collected = new Map<string, SearchOutcome>();
+  const tasks: Promise<void>[] = [];
 
-  const tasks = candidates.map((rule) =>
-    (async () => {
+  for (const rule of rules) {
+    // 1. 熔断中
+    if (!available(rule.id)) {
+      collected.set(rule.id, {
+        id: rule.id, name: rule.name, count: 0, ms: 0, items: [],
+        error: '该来源暂时不可用',
+      });
+      continue;
+    }
+
+    // 2. 刚失败过：负缓存命中就不打上游
+    const recent = recentFailure(rule.id, key);
+    if (recent) {
+      collected.set(rule.id, {
+        id: rule.id, name: rule.name, count: 0, ms: 0, items: [],
+        error: '该来源暂时不可用',
+      });
+      continue;
+    }
+
+    // 3. 正常请求
+    tasks.push((async () => {
       const started = Date.now();
       const cacheKey = 'search:' + rule.id + ':' + key;
       try {
@@ -114,32 +156,32 @@ async function searchSources(keyword: string, rules: Rule[]): Promise<SearchOutc
         const ms = Date.now() - started;
         const detail = String((err as Error)?.message || err).slice(0, 100);
         recordFailure(rule.id, detail, ms);
+        rememberFailure(rule.id, key, detail);
         log.upstream(rule.id, false, ms, detail);
         collected.set(rule.id, { id: rule.id, name: rule.name, count: 0, ms, items: [], error: detail });
       }
-    })(),
-  );
+    })());
+  }
 
-  // 总时限：到点就带着已有结果返回
+  // 排序：能用的、上次快的排前面，让有限的并发槽位优先给靠谱的源
+  void sortByHealth;
+
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, SEARCH_DEADLINE_MS));
   await Promise.race([Promise.all(tasks), deadline]);
 
-  const outcomes: SearchOutcome[] = [];
+  // 到点还没回来的（发了请求但没等到）
   for (const rule of rules) {
-    const hit = collected.get(rule.id);
-    if (hit) { outcomes.push(hit); continue; }
-    // 没回来的分两种：熔断中（根本没发请求）和超过总时限（发了没等到）
-    const skippedByBreaker = !available(rule.id);
-    outcomes.push({
-      id: rule.id,
-      name: rule.name,
-      count: 0,
-      ms: skippedByBreaker ? 0 : SEARCH_DEADLINE_MS,
-      items: [],
-      error: skippedByBreaker ? '该来源暂时不可用' : '响应超时',
+    if (collected.has(rule.id)) continue;
+    collected.set(rule.id, {
+      id: rule.id, name: rule.name, count: 0, ms: SEARCH_DEADLINE_MS, items: [],
+      error: '响应超时',
     });
+    // 超时也记负缓存：同一个词短时间内再搜，它还是赶不上，别让用户再等一次。
+    // 时长比失败短（默认 45 秒），给对方恢复机会。
+    rememberFailure(rule.id, key, '响应超时', SEARCH_TIMEOUT_TTL);
   }
-  void skipped;
+
+  const outcomes = rules.map((r) => collected.get(r.id)!);
   log.debug('search-done', {
     keyword: key,
     ready: outcomes.filter((o) => !o.error).length,
